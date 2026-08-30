@@ -20,6 +20,12 @@ import {
 } from '../db.js';
 import { invokeAgent } from './invoke.js';
 import { sendResponse, setTyping } from '../discord/client.js';
+import {
+  cancelStream,
+  finalizeStream,
+  pushStreamEvent,
+  startStreamMessage,
+} from '../discord/streaming.js';
 import { computeEffectiveChannelSettings } from './channel-settings.js';
 
 /** Channels currently being processed (per-channel serial lock) */
@@ -205,6 +211,9 @@ async function processMessage(
 
   const typingLoop = createTypingLoop(jid);
 
+  // Live activity message (best-effort; null message degrades to single-shot)
+  const stream = config.streaming !== 'off' ? await startStreamMessage(jid) : null;
+
   try {
     const prompt = `[Discord user: ${senderName}]\n${content}`;
 
@@ -218,15 +227,23 @@ async function processMessage(
       cwd: effective.effectiveCwd,
       signal,
       attachments,
+      onEvent: stream
+        ? (event) => {
+            void pushStreamEvent(stream, event);
+          }
+        : undefined,
     });
 
     if (signal.aborted) {
       markMessageFailed(rowid);
+      if (stream) await finalizeStream(stream, undefined); // preserve activity log
       logger.info({ jid, rowid }, 'Message abandoned: shutdown interrupted processing');
       return;
     }
 
     if (result.ok) {
+      if (stream) await finalizeStream(stream, result.text);
+      // Answer is always delivered as its own message(s) below the log.
       const sent = await sendResponse(jid, result.text);
       if (!sent) {
         markMessageFailed(rowid);
@@ -236,10 +253,23 @@ async function processMessage(
 
       logMessage(jid, 'assistant', result.text);
       markMessageDone(rowid);
-      logger.info({ jid, responseLen: result.text.length }, 'Message processed');
+      logger.info(
+        { jid, responseLen: result.text.length, streamed: Boolean(stream?.message) },
+        'Message processed',
+      );
       return;
     }
 
+    if (result.killed) {
+      // pi was SIGTERM'd (gateway restart/stop): keep the activity log,
+      // don't delete history and don't spam a ⚠️ error message.
+      markMessageFailed(rowid);
+      if (stream) await finalizeStream(stream, undefined);
+      logger.warn({ jid, rowid, error: result.error }, 'pi killed (shutdown/restart); activity log preserved');
+      return;
+    }
+
+    if (stream) await cancelStream(stream);
     const errMsg = `⚠️ Agent error: ${result.error?.slice(0, 300) || 'unknown error'}`;
     await sendResponse(jid, errMsg);
     markMessageFailed(rowid);
@@ -247,12 +277,14 @@ async function processMessage(
   } catch (err: any) {
     if (signal.aborted) {
       markMessageFailed(rowid);
+      if (stream) await finalizeStream(stream, undefined); // preserve activity log
       logger.info({ jid, rowid }, 'Message abandoned: shutdown interrupted processing');
       return;
     }
 
     logger.error({ jid, err: err.message }, 'processMessage failed');
     markMessageFailed(rowid);
+    if (stream) await cancelStream(stream);
     try {
       await sendResponse(jid, `⚠️ Internal error: ${err.message?.slice(0, 200)}`);
     } catch {

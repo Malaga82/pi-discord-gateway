@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.0] - 2026-08-30
+
+### Added
+
+- **Live activity streaming** — while pi works, the gateway posts a live message showing a Hermes-style chronological activity log (tool calls with emoji + verb + short arg, interleaved interstitial commentary) and optionally the streamed response tail. Modes via `STREAMING`: `off` (classic single-shot), `tools` (activity log, default), `full` (log + thinking + streamed text). Throttle via `STREAMING_UPDATE_MS` (default 2000). The final answer is always delivered as its own message below the log; on `pi` shutdown/restart the activity log is preserved instead of showing an error.
+- **Bot-to-bot communication** — whitelisted peer bots can trigger the agent by @mentioning it, enabling multi-agent workflows (e.g. pi ↔ Hermes agent). Config: `ALLOW_BOT_PEERS` (comma-separated Discord user IDs; empty = ignore all bots, upstream default). Follows the `allowBots=mentions` pattern established by OpenClaw and Hermes-agent.
+- **Bot-peer loop guard** — two chatting bots can no longer ping-pong indefinitely: a sliding window per (peer, channel) drops messages once `BOT_LOOP_MAX` (default 10) exchanges occur within `BOT_LOOP_WINDOW_MS` (default 5 minutes). Pattern from OpenClaw's bot loop protection.
+- Reply-to-bot now counts as a trigger in `open-trigger` channels, so replying to a bot message continues the conversation without re-mentioning.
+
+### Changed
+
+- pi is invoked with `--mode json` when a streaming consumer is attached; the JSONL event stream is parsed incrementally and falls back to legacy plain-text handling when no valid events are produced.
+- `AgentResult` gained a `killed` flag: SIGTERM/SIGKILL exits (143/137) during shutdown/restart are no longer reported as agent errors.
+- Model catalog rewritten around pi's `ModelRuntime` API (pi ≥ 0.84.4) with graceful fallback when the SDK runtime is unavailable; dev dependencies bumped accordingly.
+
 ## [1.7.0] - 2026-07-17
 
 ### Changed

@@ -35,6 +35,8 @@ import { handleAutocomplete, handleChatCommand, registerGlobalCommands } from '.
 let client: Client | null = null;
 let triggerPattern: RegExp;
 let botId: string;
+// Bot-peer loop guard: sliding window of message timestamps per "peerId:channelId"
+const botPeerMsgTimes = new Map<string, number[]>();
 
 export async function startDiscord(): Promise<void> {
   client = new Client({
@@ -100,8 +102,35 @@ async function handleInteraction(interaction: Interaction): Promise<void> {
 }
 
 async function handleMessage(message: Message): Promise<void> {
-  // Ignore bot messages
-  if (message.author.bot) return;
+  // Bot-to-bot: accept whitelisted peer bots that @mention us (pattern: OpenClaw allowBots=mentions,
+  // Hermes-agent DISCORD_ALLOW_BOTS=mentions). All other bot messages are ignored as upstream.
+  if (message.author.bot) {
+    const peerAllowed =
+      config.allowBotPeers.includes(message.author.id) &&
+      (message.mentions.users.has(botId) ||
+        message.content.includes(`<@${botId}>`) ||
+        message.content.includes(`<@!${botId}>`));
+    if (!peerAllowed) return;
+    // Loop guard: sliding window per (peer, channel), drop when over threshold
+    const guardKey = `${message.author.id}:${message.channelId}`;
+    const now = Date.now();
+    const times = (botPeerMsgTimes.get(guardKey) ?? []).filter(
+      (t) => now - t < config.botLoopWindowMs,
+    );
+    times.push(now);
+    botPeerMsgTimes.set(guardKey, times);
+    if (config.botLoopMax > 0 && times.length > config.botLoopMax) {
+      logger.warn(
+        { guardKey, count: times.length, windowMs: config.botLoopWindowMs },
+        'Bot-peer loop guard tripped, dropping message',
+      );
+      return;
+    }
+    logger.info(
+      { peer: message.author.username, id: message.author.id, jid: `dc:${message.channelId}` },
+      'Accepted bot-peer message',
+    );
+  }
 
   const isDM = !message.guild;
   const channelId = message.channelId;
@@ -167,9 +196,11 @@ async function handleMessage(message: Message): Promise<void> {
   }
 
   // Reply context
+  let isReplyToBot = false;
   if (message.reference?.messageId) {
     try {
       const ref = await message.channel.messages.fetch(message.reference.messageId);
+      isReplyToBot = ref.author?.id === botId;
       const refAuthor = ref.member?.displayName || ref.author.displayName || ref.author.username;
       content = `[Reply to ${refAuthor}] ${content}`;
     } catch {
@@ -218,7 +249,8 @@ async function handleMessage(message: Message): Promise<void> {
   }
 
   // ── Trigger check ──
-  if (channel.requiresTrigger && !triggerPattern.test(content)) {
+  // Replying to a bot message counts as a trigger (conversation continuation)
+  if (channel.requiresTrigger && !isReplyToBot && !triggerPattern.test(content)) {
     logger.debug({ jid }, 'Message does not match trigger, ignoring');
     return;
   }
@@ -287,6 +319,18 @@ export async function setTyping(jid: string): Promise<void> {
     }
   } catch {
     // best-effort
+  }
+}
+
+/** Resolve a text channel by jid; undefined when unavailable (best-effort, never throws). */
+export async function fetchChannel(jid: string): Promise<TextChannel | undefined> {
+  if (!client) return undefined;
+  const channelId = jid.replace(/^dc:/, '');
+  try {
+    const channel = await client.channels.fetch(channelId);
+    return channel && 'send' in channel ? (channel as TextChannel) : undefined;
+  } catch {
+    return undefined;
   }
 }
 

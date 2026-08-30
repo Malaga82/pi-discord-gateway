@@ -49,6 +49,8 @@ export async function invokeAgent(
     cwd?: string;
     signal?: AbortSignal;
     attachments?: string | null;
+    /** Live event consumer (streaming mode) — switches pi to JSONL event output */
+    onEvent?: (event: any) => void;
   },
 ): Promise<AgentResult> {
   const sessionDir = resolveChannelSessionDir(channelFolder);
@@ -106,6 +108,12 @@ export async function invokeAgent(
   const prompt = attachmentPrompt ? `${userText}\n\n${attachmentPrompt}` : userText;
   args.push('-p', prompt);
 
+  // Streaming: when a consumer wants live events, ask pi for JSONL event output.
+  const onEvent = opts?.onEvent;
+  if (onEvent) {
+    args.push('--mode', 'json');
+  }
+
   const { bin: effectiveBin, args: effectiveArgs } = resolvePiSpawn(config.piBin, args);
 
   logger.debug(
@@ -123,7 +131,44 @@ export async function invokeAgent(
     const chunks: Buffer[] = [];
     const errChunks: Buffer[] = [];
 
-    proc.stdout.on('data', (c: Buffer) => chunks.push(c));
+    // Incremental JSONL parsing for streaming mode. If pi produces no valid
+    // JSON events (older binary, changed output format) we fall back to the
+    // legacy plain-text handling below.
+    let sawJson = false;
+    let finalText = '';
+    let lineBuf = '';
+    const feedLines = (chunk: Buffer) => {
+      lineBuf += chunk.toString('utf-8');
+      let newlineIndex = lineBuf.indexOf('\n');
+      while (newlineIndex !== -1) {
+        const line = lineBuf.slice(0, newlineIndex).trim();
+        lineBuf = lineBuf.slice(newlineIndex + 1);
+        if (line) {
+          let event: any;
+          try {
+            event = JSON.parse(line);
+          } catch {
+            event = undefined;
+          }
+          if (event && typeof event === 'object' && typeof event.type === 'string') {
+            sawJson = true;
+            const text = extractAssistantText(event);
+            if (text) finalText = text;
+            try {
+              onEvent?.(event);
+            } catch {
+              // Consumer errors must not break the agent invocation.
+            }
+          }
+        }
+        newlineIndex = lineBuf.indexOf('\n');
+      }
+    };
+
+    proc.stdout.on('data', (c: Buffer) => {
+      chunks.push(c);
+      if (onEvent) feedLines(c);
+    });
     proc.stderr.on('data', (c: Buffer) => errChunks.push(c));
 
     // Abort support
@@ -140,17 +185,40 @@ export async function invokeAgent(
       proc.on('close', () => opts.signal!.removeEventListener('abort', onAbort));
     }
 
-    proc.on('close', (code) => {
+    proc.on('close', (code, killSignal) => {
+      if (onEvent && lineBuf.trim()) feedLines(Buffer.from('\n'));
       const stdout = Buffer.concat(chunks).toString('utf-8').trim();
       const stderr = Buffer.concat(errChunks).toString('utf-8').trim();
 
       if (code !== 0) {
+        // SIGTERM/SIGKILL (exit 143/137) = shutdown/restart or abort,
+        // not a pi failure — callers use this to preserve the log and
+        // skip the ⚠️ error message.
+        const killed = code === 143 || code === 137 || killSignal !== null;
         logger.warn({ code, stderr: stderr.slice(0, 500), channelFolder }, 'pi exited with error');
         resolve({
           ok: false,
           text: '',
           error: stderr.slice(0, 600) || `pi exited with code ${code}`,
+          killed,
         });
+        return;
+      }
+
+      if (sawJson) {
+        if (finalText) {
+          resolve({ ok: true, text: finalText });
+        } else {
+          const sessionError = readLatestAgentErrorFromSession(channelFolder);
+          resolve({
+            ok: false,
+            text: '',
+            error:
+              sessionError ||
+              stderr.slice(0, 600) ||
+              'pi completed without producing a response (no assistant text in event stream)',
+          });
+        }
         return;
       }
 
@@ -175,6 +243,20 @@ export async function invokeAgent(
       reject(err);
     });
   });
+}
+
+/** Return the final answer text from an assistant message_end event, if any. */
+function extractAssistantText(event: any): string | undefined {
+  if (event.type !== 'message_end') return undefined;
+  const message = event.message;
+  if (!message || message.role !== 'assistant' || !Array.isArray(message.content)) return undefined;
+  if (message.stopReason === 'pending' || message.stopReason === 'error') return undefined;
+  const text = message.content
+    .filter((block: any) => block.type === 'text' && typeof block.text === 'string')
+    .map((block: any) => block.text)
+    .join('\n')
+    .trim();
+  return text || undefined;
 }
 
 export function buildAttachmentPathPrompt(downloaded: DownloadedFile[]): string {

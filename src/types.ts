@@ -32,4 +32,6 @@ export interface AgentResult {
   ok: boolean;
   text: string;
   error?: string;
+  /** pi was SIGTERM'd/SIGKILL'd (shutdown/restart/abort) — not a real failure */
+  killed?: boolean;
 }

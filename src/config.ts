@@ -132,6 +132,16 @@ function parseChannelPolicy(value: string): ChannelPolicy {
   return 'allowlist';
 }
 
+const VALID_STREAMING_MODES = ['off', 'tools', 'full'] as const;
+type StreamingMode = (typeof VALID_STREAMING_MODES)[number];
+
+function parseStreamingMode(value: string | undefined): StreamingMode {
+  const v = (value || '').trim().toLowerCase();
+  if (v === 'off' || v === 'false' || v === '0' || v === 'no') return 'off';
+  if (['true', '1', 'yes', 'on', 'full'].includes(v)) return 'full';
+  return 'tools'; // default (also for unknown values)
+}
+
 export const config = {
   /** Discord bot token (required) */
   discordToken: env('DISCORD_BOT_TOKEN'),
@@ -200,6 +210,24 @@ export const config = {
 
   /** Max combined attachment size per Discord message in bytes (0 disables the limit) */
   maxTotalAttachmentBytes: envInt('MAX_TOTAL_ATTACHMENT_BYTES', 50 * 1024 * 1024, { min: 0 }),
+
+  /** Comma-separated Discord user IDs of peer bots allowed to trigger this bot (bot-to-bot, must also @mention us). Empty = ignore all bots (default upstream behavior). Pattern from OpenClaw allowBots=mentions / Hermes-agent DISCORD_ALLOW_BOTS */
+  allowBotPeers: env('ALLOW_BOT_PEERS')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+
+  /** Bot-peer loop guard: max peer messages per (peer, channel) within the window before dropping (0 disables guard) */
+  botLoopMax: envInt('BOT_LOOP_MAX', 10, { min: 0 }),
+
+  /** Bot-peer loop guard sliding window in ms */
+  botLoopWindowMs: envInt('BOT_LOOP_WINDOW_MS', 5 * 60_000, { min: 1000 }),
+
+  /** Live activity mode: off (nothing until done), tools (Hermes-style activity log), full (log + streamed text) */
+  streaming: parseStreamingMode(readEnvValue('STREAMING')),
+
+  /** Min interval between streaming message edits (ms) */
+  streamingUpdateMs: envInt('STREAMING_UPDATE_MS', 2000, { min: 500 }),
 } as const;
 
 export type Config = typeof config;

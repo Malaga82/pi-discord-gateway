@@ -41,6 +41,8 @@ That's it. The setup wizard checks prerequisites, asks for your Discord bot toke
 - **Concurrency control** — per-channel serial processing + configurable global limit
 - **DM auto-registration** — direct messages work out of the box
 - **Discord slash commands** — `/pi status`, `/pi model`, `/pi thinking`, `/pi new`, `/pi stop`
+- **Live activity streaming** — while pi works, the bot edits a live message showing a Hermes-style activity log (tool calls, interstitial text) and optionally streamed response text (`STREAMING=tools|full|off`)
+- **Bot-to-bot communication** — whitelisted peer bots can trigger the agent via @mention, with a sliding-window loop guard (`ALLOW_BOT_PEERS`)
 - **Abort command** — `/pi stop` terminates the running task and clears queued messages
 - **Attachment relay** — Discord file uploads are downloaded and passed to `pi` by local path so agents can inspect or convert any supported file type without flooding context
 - **Message and file sending** — `piscord send` lets pi send plain text, files, or both to any Discord channel
@@ -215,6 +217,11 @@ Most users won't need to edit this file directly — `piscord setup` generates i
 | `MAX_ATTACHMENT_BYTES`       | `26214400`                      | Max size per attachment (0 = no limit)                                     |
 | `MAX_TOTAL_ATTACHMENT_BYTES` | `52428800`                      | Max combined attachment size (0 = no limit)                                |
 | `MEDIA_RETENTION_HOURS`      | `168`                           | Hours to keep downloaded attachment files for path-based agent access      |
+| `STREAMING`                  | `tools`                         | Live activity message: `off`, `tools` (activity log), `full` (log + streamed text) |
+| `STREAMING_UPDATE_MS`        | `2000`                          | Min interval between live message edits (ms)                               |
+| `ALLOW_BOT_PEERS`            | _(none)_                        | Comma-separated Discord user IDs of peer bots allowed to trigger the agent (must also @mention the bot). Empty = ignore all bots |
+| `BOT_LOOP_MAX`               | `10`                            | Bot-peer loop guard: max peer messages per (peer, channel) within the window before dropping (0 = no guard) |
+| `BOT_LOOP_WINDOW_MS`         | `300000`                        | Bot-peer loop guard sliding window (ms)                                    |
 | `SESSIONS_DIR`               | _(platform default)_/sessions   | Session storage directory (see Data Locations)                             |
 | `DB_PATH`                    | _(platform default)_/gateway.db | SQLite database path (see Data Locations)                                  |
 | `LOG_LEVEL`                  | `info`                          | Log level: debug/info/warn/error                                           |
