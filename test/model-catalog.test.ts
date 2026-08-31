@@ -226,6 +226,75 @@ describe('loadModelCatalog stale-while-revalidate', () => {
   });
 });
 
+describe('loadModelCatalog first-load (hot path)', () => {
+  it('serves an empty placeholder without a blocking sync spawn, then fills asynchronously', async () => {
+    mockPiCatalog();
+    const cwd = '/tmp/first-load-check';
+    execFileMock.mockImplementation(
+      (_bin: string, _args: string[], _opts: unknown, cb: (err: unknown, stdout: string) => void) => {
+        cb(null, defaultCliOutput);
+      },
+    );
+    spawnSyncMock.mockClear();
+
+    const immediate = listAvailableModels({ cwd });
+    expect(immediate).toEqual([]); // placeholder, no sync spawn
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(execFileMock).toHaveBeenCalled();
+    const filled = listAvailableModels({ allowStale: true, cwd });
+    expect(filled.map((model) => model.ref).sort()).toEqual(['other/gamma', 'test/alpha', 'test/beta']);
+  });
+
+  it('bumps loadedAt on a failed refresh so retries back off to one per TTL', async () => {
+    mockPiCatalog();
+    const cwd = '/tmp/backoff-check';
+    listAvailableModels({ forceRefresh: true, cwd });
+
+    execFileMock.mockImplementation(
+      (_bin: string, _args: string[], _opts: unknown, cb: (err: Error | null, stdout: string) => void) => {
+        cb(new Error('pi broken'), '');
+      },
+    );
+
+    const realNow = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(realNow + 31_000);
+      const stale = listAvailableModels({ cwd });
+      expect(stale.map((model) => model.ref)).toEqual(['other/gamma', 'test/alpha', 'test/beta']);
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // Failed refresh kept the models but renewed loadedAt → no longer stale.
+      expect(isModelCatalogStale(cwd)).toBe(false);
+      expect(listAvailableModels({ cwd }).map((model) => model.ref)).toEqual([
+        'other/gamma',
+        'test/alpha',
+        'test/beta',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('enabled-models patterns cache', () => {
+  it('reads SettingsManager once per TTL for non-forced lookups', async () => {
+    mockPiCatalog(['test/beta']);
+    const cwd = '/tmp/patterns-cache';
+    const createSpy = vi.spyOn(SettingsManager, 'create');
+
+    await listSelectableModels({ forceRefresh: true, cwd });
+    await listSelectableModels({ cwd });
+    await listSelectableModels({ cwd });
+
+    // One forced read (which refreshes the cache); the two non-forced calls hit the cache.
+    expect(createSpy.mock.calls.filter((call) => call[0] === cwd)).toHaveLength(1);
+  });
+});
+
 describe('parsePiModelList', () => {
   it('parses pi --list-models table output', () => {
     expect(parsePiModelList(defaultCliOutput)).toEqual([
@@ -245,7 +314,11 @@ describe('parsePiModelList', () => {
     ]);
   });
 
-  it('returns an empty catalog when no table header is present', () => {
-    expect(parsePiModelList('no models available\n')).toEqual([]);
+  it('returns undefined when no table header is present (format change → SDK fallback)', () => {
+    expect(parsePiModelList('no models available\n')).toBeUndefined();
+  });
+
+  it('returns an empty (authoritative) catalog for a valid header with zero rows', () => {
+    expect(parsePiModelList('provider  model  context  max-out  thinking  images\n')).toEqual([]);
   });
 });

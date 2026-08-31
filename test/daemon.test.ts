@@ -33,7 +33,7 @@ describe('buildPeerSymlinkExecStartPre', () => {
   const cliPath = '/root/.pi/agent/npm/node_modules/piscord/dist/cli/index.js';
   const globalRoot = '/usr/local/lib/node_modules';
 
-  it('links both peers when both exist in the global root', () => {
+  it('links both peers when both exist in the global root, replacing real dirs safely', () => {
     const existing = new Set([
       `${globalRoot}/@earendil-works/pi-coding-agent`,
       `${globalRoot}/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai`,
@@ -46,11 +46,12 @@ describe('buildPeerSymlinkExecStartPre', () => {
 
     expect(line).toBeDefined();
     expect(line).toContain('mkdir -p "/root/.pi/agent/npm/node_modules/@earendil-works"');
+    // rm -rf first: ln -sfn alone would NEST the symlink inside a real dir.
     expect(line).toContain(
-      `ln -sfn "${globalRoot}/@earendil-works/pi-coding-agent" "/root/.pi/agent/npm/node_modules/@earendil-works/pi-coding-agent"`,
+      `rm -rf "/root/.pi/agent/npm/node_modules/@earendil-works/pi-coding-agent" && ln -sfn "${globalRoot}/@earendil-works/pi-coding-agent" "/root/.pi/agent/npm/node_modules/@earendil-works/pi-coding-agent"`,
     );
     expect(line).toContain(
-      `ln -sfn "${globalRoot}/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai" "/root/.pi/agent/npm/node_modules/@earendil-works/pi-ai"`,
+      `rm -rf "/root/.pi/agent/npm/node_modules/@earendil-works/pi-ai" && ln -sfn "${globalRoot}/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai" "/root/.pi/agent/npm/node_modules/@earendil-works/pi-ai"`,
     );
   });
 

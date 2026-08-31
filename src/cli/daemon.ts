@@ -138,9 +138,15 @@ export function buildPeerSymlinkExecStartPre(
 
   const linkDir = join(nodeModulesRoot, '@earendil-works');
   const q = (path: string) => `"${path}"`;
-  const links = [`ln -sfn ${q(codingAgent)} ${q(join(linkDir, 'pi-coding-agent'))}`];
+  // rm -rf first: `ln -sfn` on an existing REAL directory would nest the
+  // symlink inside it instead of replacing it.
+  const links = [
+    `rm -rf ${q(join(linkDir, 'pi-coding-agent'))} && ln -sfn ${q(codingAgent)} ${q(join(linkDir, 'pi-coding-agent'))}`,
+  ];
   if (piAi) {
-    links.push(`ln -sfn ${q(piAi)} ${q(join(linkDir, 'pi-ai'))}`);
+    links.push(
+      `rm -rf ${q(join(linkDir, 'pi-ai'))} && ln -sfn ${q(piAi)} ${q(join(linkDir, 'pi-ai'))}`,
+    );
   }
 
   return `ExecStartPre=/bin/sh -c 'mkdir -p ${q(linkDir)} && ${links.join(' && ')}'`;

@@ -24,8 +24,9 @@ export interface DownloadedFile {
   contentType: string;
 }
 
-/** Download timeout per file (30s) */
-const DOWNLOAD_TIMEOUT_MS = 30_000;
+/** Download stall timeout: aborts when NO data flows for this long (a slow
+ * but flowing transfer is fine; a hung one is not). */
+const DOWNLOAD_STALL_MS = 30_000;
 
 /** Convert configured media retention to milliseconds. */
 function mediaTtlMs(): number {
@@ -88,19 +89,38 @@ async function streamAttachmentToFile(
   filePath: string,
   parentSignal?: AbortSignal,
 ): Promise<void> {
-  const timeoutSignal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
-  const signal = parentSignal ? AbortSignal.any([parentSignal, timeoutSignal]) : timeoutSignal;
-  const res = await fetch(attachment.url, { signal });
+  const stallController = new AbortController();
+  let stallTimer: NodeJS.Timeout | undefined;
+  const armStall = () => {
+    if (stallTimer) clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      stallController.abort(new Error('attachment download stalled'));
+    }, DOWNLOAD_STALL_MS);
+    stallTimer.unref();
+  };
+  armStall();
 
-  if (!res.ok) {
-    throw new Error(`Attachment download failed with status ${res.status}`);
+  const signal = parentSignal
+    ? AbortSignal.any([parentSignal, stallController.signal])
+    : stallController.signal;
+
+  try {
+    const res = await fetch(attachment.url, { signal });
+
+    if (!res.ok) {
+      throw new Error(`Attachment download failed with status ${res.status}`);
+    }
+
+    if (!res.body) {
+      throw new Error('Attachment download returned an empty body');
+    }
+
+    const body = Readable.fromWeb(res.body as any);
+    body.on('data', armStall); // progress resets the stall watchdog
+    await pipeline(body, createWriteStream(filePath), { signal });
+  } finally {
+    if (stallTimer) clearTimeout(stallTimer);
   }
-
-  if (!res.body) {
-    throw new Error('Attachment download returned an empty body');
-  }
-
-  await pipeline(Readable.fromWeb(res.body as any), createWriteStream(filePath), { signal });
 }
 
 /** Start the periodic media cleanup timer */

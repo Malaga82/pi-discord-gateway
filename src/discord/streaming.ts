@@ -63,6 +63,10 @@ export interface StreamHandle {
   editing: boolean;
   needsFlush: boolean;
   timer: ReturnType<typeof setTimeout> | undefined;
+  /** Set once the stream is finalized/cancelled: no more flush edits may run. */
+  done?: boolean;
+  /** In-flight flush, awaited by finalize/cancel so edits never reorder. */
+  flushInFlight?: Promise<void>;
 }
 
 /** pi JSONL event (loosely typed — shape comes from the agent, not the gateway). */
@@ -284,6 +288,7 @@ function clearTimer(handle: StreamHandle): void {
 }
 
 function scheduleFlush(handle: StreamHandle): void {
+  if (handle.done) return;
   if (handle.editing) {
     handle.needsFlush = true;
     return;
@@ -298,45 +303,62 @@ function scheduleFlush(handle: StreamHandle): void {
 }
 
 async function flushNow(handle: StreamHandle): Promise<void> {
-  if (!handle.message) return;
-  handle.editing = true;
-  try {
-    do {
-      handle.needsFlush = false;
-      const content = renderCommentary(handle.state);
-      if (content !== handle.lastContent) {
-        await handle.message.edit({ content: content.slice(0, COMMENTARY_MAX) });
-        handle.lastContent = content;
-        handle.lastEdit = Date.now();
-      }
-      if (handle.needsFlush) {
-        const minInterval = config.streamingUpdateMs || MIN_EDIT_INTERVAL_MS_DEFAULT;
-        if (Date.now() - handle.lastEdit < minInterval) {
-          scheduleFlush(handle);
-          break;
+  if (!handle.message || handle.done || handle.flushInFlight) return;
+  const run = (async () => {
+    handle.editing = true;
+    try {
+      do {
+        if (handle.done) break;
+        handle.needsFlush = false;
+        const content = renderCommentary(handle.state);
+        if (content !== handle.lastContent) {
+          await handle.message!.edit({ content: content.slice(0, COMMENTARY_MAX) });
+          handle.lastContent = content;
+          handle.lastEdit = Date.now();
         }
-      }
-    } while (handle.needsFlush);
-  } catch (err: any) {
-    logger.debug({ jid: handle.jid, err: err?.message }, 'Streaming edit failed (continuing)');
-  } finally {
-    handle.editing = false;
-  }
+        if (handle.needsFlush) {
+          const minInterval = config.streamingUpdateMs || MIN_EDIT_INTERVAL_MS_DEFAULT;
+          if (Date.now() - handle.lastEdit < minInterval || handle.done) {
+            scheduleFlush(handle);
+            break;
+          }
+        }
+      } while (handle.needsFlush && !handle.done);
+    } catch (err: any) {
+      logger.debug({ jid: handle.jid, err: err?.message }, 'Streaming edit failed (continuing)');
+    } finally {
+      handle.editing = false;
+    }
+  })();
+  handle.flushInFlight = run;
+  run
+    .catch(() => undefined)
+    .finally(() => {
+      if (handle.flushInFlight === run) handle.flushInFlight = undefined;
+    });
+  await run;
 }
 
 /**
- * Remove trailing log entries that duplicate the head of the final answer:
- * in tools mode the final assistant message's text gets pushed to the log as
- * if it were interstitial commentary; the answer must not appear twice.
+ * Remove trailing log entries that duplicate the tail of the final answer:
+ * in tools mode the final assistant message's text blocks get pushed to the
+ * log as if they were interstitial commentary; the answer must not appear
+ * twice. Handles multi-block finals: pops trailing text entries one by one
+ * while their concatenation remains a suffix of the final answer.
  */
 export function stripDuplicateTail(state: StreamState, final?: string): void {
   if (!final) return;
   const normFinal = final.replace(/\s+/gu, ' ').trim();
+  const run: string[] = [];
   while (state.log.length > 0) {
     const last = state.log[state.log.length - 1];
     if (last.kind !== 'text') break;
-    const probe = last.text.replace(/…+$/u, '').trim();
-    if (!probe || !normFinal.startsWith(probe)) break;
+    run.unshift(last.text.replace(/…+$/u, '').trim());
+    const joined = run.join(' ').replace(/\s+/gu, ' ').trim();
+    if (!joined || !normFinal.endsWith(joined)) {
+      run.shift(); // this entry is not part of the final answer — keep it
+      break;
+    }
     state.log.pop();
   }
 }
@@ -345,17 +367,22 @@ export function stripDuplicateTail(state: StreamState, final?: string): void {
  * Finish the stream, Hermes-style: the activity log REMAINS as its own
  * message (footer removed, final-answer duplicates stripped) and the final
  * answer is always delivered by the caller as a separate message below.
- * Always returns false: the caller must send the answer itself.
  */
-export async function finalizeStream(handle: StreamHandle, finalText?: string): Promise<boolean> {
+export async function finalizeStream(handle: StreamHandle, finalText?: string): Promise<void> {
+  handle.done = true;
   clearTimer(handle);
-  if (!handle.message) return false;
+  // Wait for any in-flight flush so its edit cannot land after ours and
+  // bury the final log under a stale "⏳ working" commentary.
+  if (handle.flushInFlight) {
+    await handle.flushInFlight.catch(() => undefined);
+  }
+  if (!handle.message) return;
   stripDuplicateTail(handle.state, (finalText ?? '').trim());
   const log = renderLog(handle.state);
   if (!log) {
     // Nothing worth keeping (text-only answer, no tools): drop placeholder.
     await deletePlaceholder(handle);
-    return false;
+    return;
   }
   try {
     await handle.message.edit({ content: log.slice(0, COMMENTARY_MAX) });
@@ -363,12 +390,15 @@ export async function finalizeStream(handle: StreamHandle, finalText?: string): 
     logger.warn({ jid: handle.jid, err: err?.message }, 'Final streaming edit failed');
     await deletePlaceholder(handle);
   }
-  return false;
 }
 
 /** Abort the stream: drop the placeholder (best-effort). */
 export async function cancelStream(handle: StreamHandle): Promise<void> {
+  handle.done = true;
   clearTimer(handle);
+  if (handle.flushInFlight) {
+    await handle.flushInFlight.catch(() => undefined);
+  }
   await deletePlaceholder(handle);
 }
 

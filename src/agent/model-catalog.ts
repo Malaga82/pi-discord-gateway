@@ -6,7 +6,7 @@ import { logger } from '../logger.js';
 import { THINKING_LEVELS, type ThinkingLevel } from "../types.js";
 import type { Model } from "@earendil-works/pi-ai";
 import { supportsModelXhigh } from './pi-ai-compat.js';
-import { resolvePiSpawn } from './pi-spawn.js';
+import { resolvePiSpawn, sanitizedChildEnv } from './pi-spawn.js';
 
 export interface AvailableModelInfo {
   ref: string;
@@ -30,14 +30,17 @@ interface ModelCache {
   models: AvailableModelInfo[];
 }
 
+// One shared in-flight guard for every async catalog refresh (SWR + slash commands + startup warm).
+const refreshPromises = new Map<string, Promise<void>>();
+// Enabled-models patterns cache (SettingsManager reads settings from disk per call).
+const patternsCache = new Map<string, { loadedAt: number; patterns: string[] | undefined }>();
+
 const CACHE_TTL_MS = 30_000;
 // A hung `pi --list-models` (broken wrapper, stuck provider lookup) must not
 // block gateway startup or the event loop indefinitely.
 const LIST_MODELS_TIMEOUT_MS = 15_000;
 
 const cacheByCwd = new Map<string, ModelCache>();
-// Background catalog refreshes in flight (stale-while-revalidate for the hot message path).
-const backgroundRefreshes = new Set<string>();
 
 export function listAvailableModels(options?: {
   forceRefresh?: boolean;
@@ -75,12 +78,24 @@ export async function listSelectableModels(options?: {
     cwd,
     options?.allowStale ?? false,
   );
-  const settingsManager = SettingsManager.create(cwd);
-  const patterns = settingsManager.getEnabledModels();
+  const patterns = getEnabledModelsScope(cwd, options?.forceRefresh ?? false);
   if (!patterns?.length) {
     return catalog.models;
   }
   return resolveEnabledModelScope(patterns, catalog.models);
+}
+
+/** Read pi's enabledModels scope for a cwd, cached with the catalog TTL. */
+function getEnabledModelsScope(cwd: string, forceRefresh: boolean): string[] | undefined {
+  const now = Date.now();
+  const cached = patternsCache.get(cwd);
+  if (!forceRefresh && cached && now - cached.loadedAt < CACHE_TTL_MS) {
+    return cached.patterns;
+  }
+  const settingsManager = SettingsManager.create(cwd);
+  const patterns = settingsManager.getEnabledModels();
+  patternsCache.set(cwd, { loadedAt: now, patterns });
+  return patterns;
 }
 
 export function resolveModelReference(
@@ -265,8 +280,18 @@ function loadModelCatalog(forceRefresh: boolean, cwd: string, allowStale: boolea
     // Stale-while-revalidate: serve the cached catalog immediately and refresh
     // off the hot path — a blocking `pi --list-models` here would stall the
     // event loop (and Discord heartbeats) for seconds on every TTL expiry.
-    scheduleBackgroundRefresh(cwd);
+    void refreshModelCatalogAsync(cwd);
     return cached;
+  }
+  if (!forceRefresh) {
+    // No cache at all on the hot path (e.g. a channel with a brand-new cwd):
+    // serve an empty placeholder — the model ref is still passed through raw —
+    // and load asynchronously. Only forceRefresh callers (startup, tests,
+    // explicit refreshes) pay the synchronous spawn cost.
+    void refreshModelCatalogAsync(cwd);
+    const placeholder: ModelCache = { loadedAt: now, cwd, models: [] };
+    cacheByCwd.set(cwd, placeholder);
+    return placeholder;
   }
   const registry = createModelRegistry();
   const sdkModels = registry.getAvailable().map(toAvailableModelInfo);
@@ -279,21 +304,36 @@ function loadModelCatalog(forceRefresh: boolean, cwd: string, allowStale: boolea
   return refreshed;
 }
 
-function scheduleBackgroundRefresh(cwd: string): void {
-  if (backgroundRefreshes.has(cwd)) return;
-  backgroundRefreshes.add(cwd);
-  void listModelsFromPiCliAsync(config.piBin, cwd)
-    .then((cliModels) => {
-      if (!cliModels) return;
-      const registry = createModelRegistry();
-      const sdkModels = registry.getAvailable().map(toAvailableModelInfo);
-      const models = mergeModelMetadata(cliModels, sdkModels).sort((a, b) =>
-        a.ref.localeCompare(b.ref),
-      );
-      cacheByCwd.set(cwd, { loadedAt: Date.now(), cwd, models });
-    })
+/**
+ * Asynchronously (re)load the catalog for a cwd via background execFile.
+ * Deduplicated per cwd; on failure keeps the previous models but bumps
+ * loadedAt, so a broken `pi --list-models` retries at most once per TTL
+ * instead of once per message.
+ */
+export function refreshModelCatalogAsync(cwd: string): Promise<void> {
+  const existing = refreshPromises.get(cwd);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    const prev = cacheByCwd.get(cwd);
+    const cliModels = await listModelsFromPiCliAsync(config.piBin, cwd);
+    if (!cliModels) {
+      // Failed or unparseable: keep serving what we have, back off for a TTL.
+      cacheByCwd.set(cwd, { loadedAt: Date.now(), cwd, models: prev?.models ?? [] });
+      return;
+    }
+    const registry = createModelRegistry();
+    const sdkModels = registry.getAvailable().map(toAvailableModelInfo);
+    const models = mergeModelMetadata(cliModels, sdkModels).sort((a, b) =>
+      a.ref.localeCompare(b.ref),
+    );
+    cacheByCwd.set(cwd, { loadedAt: Date.now(), cwd, models });
+  })()
     .catch(() => undefined)
-    .finally(() => backgroundRefreshes.delete(cwd));
+    .finally(() => refreshPromises.delete(cwd));
+
+  refreshPromises.set(cwd, promise);
+  return promise;
 }
 
 function buildListModelArgs(piBin: string): { bin: string; args: string[] } {
@@ -308,7 +348,7 @@ function listModelsFromPiCli(piBin: string, cwd: string): AvailableModelInfo[] |
   const { bin, args } = buildListModelArgs(piBin);
   const result = spawnSync(bin, args, {
     cwd,
-    env: process.env,
+    env: sanitizedChildEnv(),
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     maxBuffer: 10 * 1024 * 1024,
@@ -328,7 +368,7 @@ function listModelsFromPiCliAsync(piBin: string, cwd: string): Promise<Available
       args,
       {
         cwd,
-        env: process.env,
+        env: sanitizedChildEnv(),
         encoding: 'utf8',
         maxBuffer: 10 * 1024 * 1024,
         timeout: LIST_MODELS_TIMEOUT_MS,
@@ -362,13 +402,19 @@ function findModelTableHeader(lines: string[]): {
   return undefined;
 }
 
-export function parsePiModelList(output: string): AvailableModelInfo[] {
+/**
+ * Parse `pi --list-models` table output.
+ * Returns undefined when the output has no recognizable table header (format
+ * change, error banner) so callers can fall back to the SDK catalog; a valid
+ * table with zero rows returns [] and stays authoritative.
+ */
+export function parsePiModelList(output: string): AvailableModelInfo[] | undefined {
   const lines = output
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
   const header = findModelTableHeader(lines);
-  if (!header) return [];
+  if (!header) return undefined;
   return lines.slice(header.rowsStart).flatMap((line) => {
     const columns = line.split(/\s+/);
     const provider = columns[header.providerIndex];
@@ -427,7 +473,7 @@ function ensureModelRuntime(): void {
       // Never clear the cache here — an empty cache forces the hot message path
       // back onto the blocking sync `pi --list-models` load.
       for (const cwd of cacheByCwd.keys()) {
-        scheduleBackgroundRefresh(cwd);
+        void refreshModelCatalogAsync(cwd);
       }
       return runtime;
     })

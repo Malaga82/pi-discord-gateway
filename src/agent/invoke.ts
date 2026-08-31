@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { StringDecoder } from 'node:string_decoder';
 import { type AttachmentMeta } from '../discord/attachments.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
@@ -10,7 +11,7 @@ import {
   resolveLatestChannelSessionFile,
 } from '../session/path.js';
 import type { AgentResult } from '../types.js';
-import { resolvePiSpawn } from './pi-spawn.js';
+import { resolvePiSpawn, sanitizedChildEnv } from './pi-spawn.js';
 
 export interface SessionTokenUsage {
   input: number;
@@ -40,6 +41,45 @@ export interface ChannelSessionStatus {
  * Each channel gets its own session directory so conversation history persists.
  * Uses `pi --session-dir <dir> --continue -p <message>` (print mode, no TUI).
  */
+/**
+ * Incremental JSONL line reader. Decodes with StringDecoder so a UTF-8
+ * multibyte sequence split across chunk boundaries never corrupts a line
+ * (per-chunk `toString()` would emit U+FFFD and break the JSON parse).
+ */
+export function createJsonLineReader(onLine: (line: string) => void): {
+  push: (chunk: Buffer) => void;
+  end: () => void;
+} {
+  const decoder = new StringDecoder('utf-8');
+  let lineBuf = '';
+
+  const drain = () => {
+    let newlineIndex = lineBuf.indexOf('\n');
+    while (newlineIndex !== -1) {
+      const line = lineBuf.slice(0, newlineIndex).trim();
+      lineBuf = lineBuf.slice(newlineIndex + 1);
+      if (line) onLine(line);
+      newlineIndex = lineBuf.indexOf('\n');
+    }
+  };
+
+  return {
+    push: (chunk: Buffer) => {
+      lineBuf += decoder.write(chunk);
+      drain();
+    },
+    end: () => {
+      lineBuf += decoder.end();
+      if (lineBuf.trim()) {
+        drain();
+        const trailing = lineBuf.trim();
+        if (trailing) onLine(trailing);
+        lineBuf = '';
+      }
+    },
+  };
+}
+
 export async function invokeAgent(
   channelFolder: string,
   userText: string,
@@ -124,10 +164,11 @@ export async function invokeAgent(
   return new Promise<AgentResult>((resolve, reject) => {
     const proc = spawn(effectiveBin, effectiveArgs, {
       cwd: effectiveCwd,
-      env: process.env,
+      env: sanitizedChildEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
+    // Streaming mode keeps only the JSONL event stream; plain mode buffers stdout.
     const chunks: Buffer[] = [];
     const errChunks: Buffer[] = [];
 
@@ -136,59 +177,88 @@ export async function invokeAgent(
     // legacy plain-text handling below.
     let sawJson = false;
     let finalText = '';
-    let lineBuf = '';
-    const feedLines = (chunk: Buffer) => {
-      lineBuf += chunk.toString('utf-8');
-      let newlineIndex = lineBuf.indexOf('\n');
-      while (newlineIndex !== -1) {
-        const line = lineBuf.slice(0, newlineIndex).trim();
-        lineBuf = lineBuf.slice(newlineIndex + 1);
-        if (line) {
-          let event: any;
-          try {
-            event = JSON.parse(line);
-          } catch {
-            event = undefined;
-          }
-          if (event && typeof event === 'object' && typeof event.type === 'string') {
-            sawJson = true;
-            const text = extractAssistantText(event);
-            if (text) finalText = text;
-            try {
-              onEvent?.(event);
-            } catch {
-              // Consumer errors must not break the agent invocation.
-            }
-          }
-        }
-        newlineIndex = lineBuf.indexOf('\n');
+    const reader = createJsonLineReader((line) => {
+      let event: any;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        event = undefined;
       }
-    };
+      if (event && typeof event === 'object' && typeof event.type === 'string') {
+        sawJson = true;
+        const text = extractAssistantText(event);
+        if (text) finalText = text;
+        try {
+          onEvent?.(event);
+        } catch {
+          // Consumer errors must not break the agent invocation.
+        }
+      }
+    });
 
     proc.stdout.on('data', (c: Buffer) => {
-      chunks.push(c);
-      if (onEvent) feedLines(c);
+      if (onEvent) reader.push(c);
+      else chunks.push(c);
     });
     proc.stderr.on('data', (c: Buffer) => errChunks.push(c));
 
     // Abort support
+    let escalationTimer: NodeJS.Timeout | undefined;
+    const clearKillTimers = () => {
+      if (escalationTimer) clearTimeout(escalationTimer);
+      escalationTimer = undefined;
+    };
+    const killProc = () => {
+      if (process.platform === 'win32') {
+        proc.kill();
+      } else {
+        proc.kill('SIGTERM');
+        escalationTimer = setTimeout(() => proc.kill('SIGKILL'), 5000);
+      }
+      // Grandchildren (e.g. `sleep` under sh) inherit the stdio pipes and keep
+      // them open, delaying the 'close' event long after the kill. Destroying
+      // our ends releases it so the invocation resolves promptly.
+      proc.stdout.destroy();
+      proc.stderr.destroy();
+    };
     if (opts?.signal) {
       const onAbort = () => {
-        if (process.platform === 'win32') {
-          proc.kill();
-        } else {
-          proc.kill('SIGTERM');
-          setTimeout(() => proc.kill('SIGKILL'), 5000);
-        }
+        killProc();
       };
       opts.signal.addEventListener('abort', onAbort, { once: true });
-      proc.on('close', () => opts.signal!.removeEventListener('abort', onAbort));
+      proc.on('close', () => {
+        opts.signal!.removeEventListener('abort', onAbort);
+        clearKillTimers();
+      });
+    }
+
+    // Per-invocation timeout: a hung pi must not hold the channel lock forever.
+    let timedOut = false;
+    let timeoutTimer: NodeJS.Timeout | undefined;
+    if (config.agentTimeoutMs > 0) {
+      timeoutTimer = setTimeout(() => {
+        timedOut = true;
+        logger.warn({ channelFolder, timeoutMs: config.agentTimeoutMs }, 'Agent invocation timed out');
+        killProc();
+      }, config.agentTimeoutMs);
+      timeoutTimer.unref();
     }
 
     proc.on('close', (code, killSignal) => {
-      if (onEvent && lineBuf.trim()) feedLines(Buffer.from('\n'));
-      const stdout = Buffer.concat(chunks).toString('utf-8').trim();
+      clearKillTimers();
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (onEvent) reader.end();
+      const stdout = sawJson ? '' : Buffer.concat(chunks).toString('utf-8').trim();
       const stderr = Buffer.concat(errChunks).toString('utf-8').trim();
+
+      if (timedOut) {
+        resolve({
+          ok: false,
+          text: '',
+          error: `Agent invocation timed out after ${config.agentTimeoutMs}ms`,
+        });
+        return;
+      }
 
       if (code !== 0) {
         // SIGTERM/SIGKILL (exit 143/137) = shutdown/restart or abort,
@@ -245,12 +315,16 @@ export async function invokeAgent(
   });
 }
 
-/** Return the final answer text from an assistant message_end event, if any. */
-function extractAssistantText(event: any): string | undefined {
+/** Return the final answer text from an assistant message_end event, if any.
+ * Messages that contain toolCall blocks are never the final answer (they are
+ * intermediate turns) — skipping them prevents a stale preamble from being
+ * delivered as the response when a run closes on a toolCall-only message. */
+export function extractAssistantText(event: any): string | undefined {
   if (event.type !== 'message_end') return undefined;
   const message = event.message;
   if (!message || message.role !== 'assistant' || !Array.isArray(message.content)) return undefined;
   if (message.stopReason === 'pending' || message.stopReason === 'error') return undefined;
+  if (message.content.some((block: any) => block.type === 'toolCall')) return undefined;
   const text = message.content
     .filter((block: any) => block.type === 'text' && typeof block.text === 'string')
     .map((block: any) => block.text)
@@ -414,19 +488,20 @@ async function getSessionStatsViaRpc(
   return new Promise((resolve, reject) => {
     const proc = spawn(rpcBin, rpcArgs, {
       cwd,
-      env: process.env,
+      env: sanitizedChildEnv(),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
     const errChunks: Buffer[] = [];
-    let stdout = '';
     let response: RpcSessionStatsResponse | undefined;
     let finished = false;
+    let escalationTimer: NodeJS.Timeout | undefined;
 
     const finish = (err?: Error) => {
       if (finished) return;
       finished = true;
       clearTimeout(timeout);
+      if (escalationTimer) clearTimeout(escalationTimer);
       if (err) {
         reject(err);
         return;
@@ -460,54 +535,30 @@ async function getSessionStatsViaRpc(
         proc.kill();
       } else {
         proc.kill('SIGTERM');
-        setTimeout(() => proc.kill('SIGKILL'), 1000);
+        escalationTimer = setTimeout(() => proc.kill('SIGKILL'), 1000);
       }
       finish(new Error('Timed out waiting for pi session stats'));
     }, 2500);
 
-    proc.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf-8');
-
-      let newlineIndex = stdout.indexOf('\n');
-      while (newlineIndex !== -1) {
-        const line = stdout.slice(0, newlineIndex).replace(/\r$/, '').trim();
-        stdout = stdout.slice(newlineIndex + 1);
-
-        if (line) {
-          try {
-            const message = JSON.parse(line) as RpcSessionStatsResponse | { type?: string };
-            if (
-              message.type === 'response' &&
-              (message as RpcSessionStatsResponse).command === 'get_session_stats'
-            ) {
-              response = message as RpcSessionStatsResponse;
-            }
-          } catch {
-            // Ignore non-JSON or partial lines from stdout.
-          }
+    const reader = createJsonLineReader((line) => {
+      try {
+        const message = JSON.parse(line) as RpcSessionStatsResponse | { type?: string };
+        if (
+          message.type === 'response' &&
+          (message as RpcSessionStatsResponse).command === 'get_session_stats'
+        ) {
+          response = message as RpcSessionStatsResponse;
         }
-
-        newlineIndex = stdout.indexOf('\n');
+      } catch {
+        // Ignore non-JSON or partial lines from stdout.
       }
     });
 
+    proc.stdout.on('data', (chunk: Buffer) => reader.push(chunk));
     proc.stderr.on('data', (chunk: Buffer) => errChunks.push(chunk));
     proc.on('error', (err) => finish(err));
     proc.on('close', (code) => {
-      const trailingLine = stdout.trim();
-      if (trailingLine) {
-        try {
-          const message = JSON.parse(trailingLine) as RpcSessionStatsResponse | { type?: string };
-          if (
-            message.type === 'response' &&
-            (message as RpcSessionStatsResponse).command === 'get_session_stats'
-          ) {
-            response = message as RpcSessionStatsResponse;
-          }
-        } catch {
-          // Ignore malformed trailing output on shutdown.
-        }
-      }
+      reader.end();
 
       if (code !== 0) {
         const stderr = Buffer.concat(errChunks).toString('utf-8').trim();

@@ -28,8 +28,8 @@ import {
   hasCachedModelCatalog,
   isModelCatalogStale,
   isThinkingLevel,
-  listAvailableModels,
   listSelectableModels,
+  refreshModelCatalogAsync,
   resolveModelReference,
   resolveThinkingForModel,
   toModelChoiceName,
@@ -100,22 +100,6 @@ export async function registerGlobalCommands(client: Client<true>): Promise<void
   logger.info('Registered global slash commands');
 }
 
-const catalogRefreshesInFlight = new Set<string>();
-
-/** Refresh a cwd's model catalog off the interaction path, at most once at a time. */
-function scheduleCatalogRefresh(cwd: string): void {
-  if (catalogRefreshesInFlight.has(cwd)) return;
-  catalogRefreshesInFlight.add(cwd);
-  setImmediate(() => {
-    try {
-      listAvailableModels({ forceRefresh: true, cwd });
-    } catch (err: any) {
-      logger.warn({ cwd, err: err.message }, 'Failed to warm model catalog');
-    } finally {
-      catalogRefreshesInFlight.delete(cwd);
-    }
-  });
-}
 
 export async function handleAutocomplete(interaction: AutocompleteInteraction): Promise<void> {
   if (interaction.commandName !== 'pi') return;
@@ -131,7 +115,9 @@ export async function handleAutocomplete(interaction: AutocompleteInteraction): 
   const cwd = channel.cwdOverride || config.piCwd;
   if (!hasCachedModelCatalog(cwd)) {
     await interaction.respond([]);
-    scheduleCatalogRefresh(cwd);
+    void refreshModelCatalogAsync(cwd).catch((err: any) => {
+      logger.warn({ cwd, err: err?.message }, 'Failed to warm model catalog');
+    });
     return;
   }
 
@@ -148,7 +134,9 @@ export async function handleAutocomplete(interaction: AutocompleteInteraction): 
   // catalogs in the background so autocomplete-only users still pick up
   // pi upgrades and provider changes.
   if (isModelCatalogStale(cwd)) {
-    scheduleCatalogRefresh(cwd);
+    void refreshModelCatalogAsync(cwd).catch((err: any) => {
+      logger.warn({ cwd, err: err?.message }, 'Failed to warm model catalog');
+    });
   }
 }
 
@@ -287,7 +275,8 @@ async function handleModelSet(interaction: ChatInputCommandInteraction): Promise
 
   const selectedRef = interaction.options.getString('model', true);
   const cwd = channel.cwdOverride || config.piCwd;
-  const models = await listSelectableModels({ forceRefresh: true, cwd });
+  await refreshModelCatalogAsync(cwd);
+  const models = await listSelectableModels({ allowStale: true, cwd });
   const selectedModel = resolveModelReference(selectedRef, models);
   if (!selectedModel) {
     await interaction.editReply({ content: `Model is no longer available: ${selectedRef}` });
@@ -370,7 +359,8 @@ async function handleThinkingSet(interaction: ChatInputCommandInteraction): Prom
     interaction.inGuild() ? { flags: MessageFlags.Ephemeral } : undefined,
   );
 
-  const effective = computeEffectiveChannelSettings(channel, { forceRefresh: true });
+  await refreshModelCatalogAsync(channel.cwdOverride || config.piCwd);
+  const effective = computeEffectiveChannelSettings(channel);
   const resolution = resolveThinkingForModel(effective.modelInfo, rawLevel);
 
   setChannelThinkingOverride(channel.jid, resolution.effective);

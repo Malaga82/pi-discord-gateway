@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.2] - 2026-08-31
+
+### Fixed — response correctness
+
+- **UTF-8-safe JSONL parsing**: pi subprocess output is decoded through `StringDecoder`, so a multibyte sequence split across chunk boundaries no longer corrupts the delivered answer with U+FFFD (agent streaming path and RPC stats path).
+- **Stale preamble no longer delivered as the answer**: `message_end` events containing toolCall blocks are never treated as the final answer, so a run closing on a toolCall-only message can't resurrect the previous turn's preamble.
+- **Streaming race fixed**: `finalizeStream`/`cancelStream` set a done flag and await any in-flight flush, and the flush loop stops once done — the final activity log can no longer be buried under a permanent "⏳ working" footer when an edit is in flight at completion time.
+- **Multi-block final answers no longer duplicated**: `stripDuplicateTail` pops trailing text entries while their concatenation remains a suffix of the final answer, instead of requiring a single-block prefix match.
+- **Empty catalog no longer cached on table-format changes**: `parsePiModelList` returns `undefined` when no table header is recognized (falls back to the SDK catalog); a valid header with zero rows stays authoritative-empty.
+
+### Fixed — availability & robustness
+
+- **Agent invocation timeout** (`AGENT_TIMEOUT_MS`, default 30 min, 0 disables): a hung pi is killed and reported as an error instead of holding the channel lock, a concurrency slot and the typing loop forever. Killing also destroys the stdio pipes so grandchildren holding them can't delay resolution.
+- **No more event-loop blocking catalog loads**: the first load for a cwd serves an empty placeholder and fills asynchronously (the model ref still passes through raw); slash-command refreshes use the async loader instead of `setImmediate`+sync spawn; startup warming runs in parallel.
+- **Failed catalog refresh backs off**: a broken `pi --list-models` keeps the previous models and bumps `loadedAt`, retrying at most once per TTL instead of once per message.
+- **Bot-peer loop guard no longer self-aliments**: dropped messages are not recorded, so the ban decays once the recorded (accepted) timestamps age out of the window.
+- Self-message guard: the bot never processes its own messages, even if its own ID is misconfigured into `ALLOW_BOT_PEERS`.
+- SIGKILL escalation timers are cleared on process close (no lingering 5s event-loop holds after aborts).
+- Reply-context REST fetch happens only when it can affect the outcome (trigger bypass) or the message is enqueued anyway — no wasted API call per reply in unregistered/non-triggered channels.
+- Attachment downloads use a 30s stall watchdog (progress resets it) instead of a total-duration timeout, so slow-but-flowing transfers are no longer aborted.
+- `piscord daemon install` generates `rm -rf` before each `ln -sfn`, so a pre-existing real directory at the peer-symlink path is replaced instead of nesting the symlink inside itself.
+- `piscord register` rejects unknown options (consistent with `task add`) instead of ignoring them silently.
+- `DISCORD_BOT_TOKEN` is stripped from the environment of every spawned pi subprocess (pi can run `bash`).
+- `engines` raised to `>=20.3` (`AbortSignal.any` requirement).
+
+### Changed — performance & hygiene
+
+- Streaming mode no longer double-buffers stdout (the plain-text fallback buffer is skipped when JSON events are consumed).
+- Windows `.cmd` shim resolution is cached per `piBin`.
+- pi `enabledModels` patterns are cached per cwd with the catalog TTL instead of reading settings on every autocomplete keystroke.
+- `message_queue` (done/failed) and `message_log` rows are purged daily after `ARCHIVE_RETENTION_DAYS` (0 = never), keeping the per-second pending group-by bounded.
+- `STREAMING_UPDATE_MS` minimum raised to 1200ms (Discord allows ~5 edits/5s per channel; lower values just earned silent 429s).
+- Unknown `STREAMING` values now log a warning instead of silently falling back to `tools`.
+- Multi-chunk responses retry a failed chunk once after a pause (rate-limit recovery) before surfacing the error.
+- `splitMessage` keeps ``` fences balanced across chunk boundaries.
+- `finalizeStream` is now `Promise<void>` (the boolean return was always false and unused).
+
+### Tests
+
+- New suites: streaming (race, duplicate-tail, render), invoke (UTF-8 reader, stale-preamble guard, timeout, sanitized env), bot-peer loop guard, DB retention, fence-aware splitting; model-catalog gains first-load/backoff/patterns-cache cases. 87 tests passing.
+
 ## [1.8.1] - 2026-08-31
 
 ### Fixed

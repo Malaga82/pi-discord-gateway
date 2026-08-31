@@ -405,6 +405,35 @@ export function enqueueScheduledTask(
   })();
 }
 
+// ── Retention ──
+
+/**
+ * Purge processed queue rows and message-log entries older than the retention
+ * window. Without this both tables grow forever and the per-second pending
+ * group-by scans an ever-larger table. Reuses ARCHIVE_RETENTION_DAYS
+ * (0 = never clean, same semantics as archived sessions).
+ */
+export function purgeOldMessages(retentionDays: number): { queue: number; log: number } {
+  if (retentionDays <= 0) {
+    return { queue: 0, log: 0 };
+  }
+
+  const cutoff = `-${retentionDays} days`;
+  const queue = db
+    .prepare(
+      "delete from message_queue where status in ('done', 'failed') and processed_at is not null and processed_at < datetime('now', ?)",
+    )
+    .run(cutoff).changes;
+  const log = db
+    .prepare('delete from message_log where timestamp < datetime(\'now\', ?)')
+    .run(cutoff).changes;
+
+  if (queue > 0 || log > 0) {
+    logger.info({ queue, log }, 'Purged old queue/log rows');
+  }
+  return { queue, log };
+}
+
 // ── Message log ──
 
 export function logMessage(channelJid: string, role: string, content: string): void {

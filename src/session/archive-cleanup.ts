@@ -1,6 +1,7 @@
 import { readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from '../config.js';
+import { purgeOldMessages } from '../db.js';
 import { logger } from '../logger.js';
 
 const ARCHIVE_TIMESTAMP_RE = /__archived_(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/;
@@ -104,6 +105,7 @@ export function startArchiveCleanup(): () => void {
   const timer = setInterval(() => {
     try {
       cleanupArchivedSessions(config.sessionsDir, config.archiveRetentionDays);
+      purgeOldMessages(config.archiveRetentionDays);
     } catch (err: any) {
       logger.warn({ err: err.message }, 'Archive cleanup error');
     }

@@ -102,6 +102,10 @@ async function handleInteraction(interaction: Interaction): Promise<void> {
 }
 
 async function handleMessage(message: Message): Promise<void> {
+  // Never react to our own messages (defensive: misconfigured ALLOW_BOT_PEERS
+  // containing our own ID would otherwise create a self-loop).
+  if (message.author.id === botId) return;
+
   // Bot-to-bot: accept whitelisted peer bots that @mention us (pattern: OpenClaw allowBots=mentions,
   // Hermes-agent DISCORD_ALLOW_BOTS=mentions). All other bot messages are ignored as upstream.
   if (message.author.bot) {
@@ -111,12 +115,15 @@ async function handleMessage(message: Message): Promise<void> {
         message.content.includes(`<@${botId}>`) ||
         message.content.includes(`<@!${botId}>`));
     if (!peerAllowed) return;
-    // Loop guard: sliding window per (peer, channel), drop when over threshold
+    // Loop guard: sliding window per (peer, channel). Dropped messages are NOT
+    // recorded — otherwise a peer retrying after a legitimate loop end would
+    // keep tripping the ban until it stays silent for a full window.
     const guardKey = `${message.author.id}:${message.channelId}`;
     const now = Date.now();
-    const times = (botPeerMsgTimes.get(guardKey) ?? []).filter(
-      (t) => now - t < config.botLoopWindowMs,
-    );
+    const peerTimes = recordBotPeerMessage(botPeerMsgTimes.get(guardKey), now, {
+      max: config.botLoopMax,
+      windowMs: config.botLoopWindowMs,
+    });
     // ponytail: opportunistic sweep instead of a periodic timer — bounds the map
     // when many peer×channel keys accumulate.
     if (botPeerMsgTimes.size > 1000) {
@@ -126,15 +133,14 @@ async function handleMessage(message: Message): Promise<void> {
         }
       }
     }
-    times.push(now);
-    botPeerMsgTimes.set(guardKey, times);
-    if (config.botLoopMax > 0 && times.length > config.botLoopMax) {
+    if (!peerTimes.accepted) {
       logger.warn(
-        { guardKey, count: times.length, windowMs: config.botLoopWindowMs },
+        { guardKey, count: peerTimes.times.length, windowMs: config.botLoopWindowMs },
         'Bot-peer loop guard tripped, dropping message',
       );
       return;
     }
+    botPeerMsgTimes.set(guardKey, peerTimes.times);
     logger.info(
       { peer: message.author.username, id: message.author.id, jid: `dc:${message.channelId}` },
       'Accepted bot-peer message',
@@ -204,20 +210,11 @@ async function handleMessage(message: Message): Promise<void> {
     }
   }
 
-  // Reply context
-  let isReplyToBot = false;
-  if (message.reference?.messageId) {
-    try {
-      const ref = await message.channel.messages.fetch(message.reference.messageId);
-      isReplyToBot = ref.author?.id === botId;
-      const refAuthor = ref.member?.displayName || ref.author.displayName || ref.author.username;
-      content = `[Reply to ${refAuthor}] ${content}`;
-    } catch {
-      // deleted message
-    }
-  }
+  // ── Trigger pre-check (cheap, no REST) ──
+  const hasTrigger = triggerPattern.test(content);
 
-  // ── Channel registration check ──
+  // ── Channel registration check ── (before the reply fetch: unregistered
+  // channels and non-triggered messages must not cost a REST call each)
   let channel = getChannel(jid);
 
   // Auto-register DMs
@@ -257,17 +254,40 @@ async function handleMessage(message: Message): Promise<void> {
     return;
   }
 
-  // ── Trigger check ──
+  // ── Reply context ──
+  // Fetched only when it can change the outcome (trigger bypass for a reply
+  // to the bot) or when the message is heading to the agent anyway (context
+  // tag). Unregistered channels and non-triggered messages skip the REST call.
+  let isReplyToBot = false;
+  let replyPrefix = '';
+  if (
+    (channel.requiresTrigger && !hasTrigger && message.reference?.messageId) ||
+    (!channel.requiresTrigger && message.reference?.messageId)
+  ) {
+    try {
+      const ref = await message.channel.messages.fetch(message.reference.messageId);
+      isReplyToBot = ref.author?.id === botId;
+      const refAuthor = ref.member?.displayName || ref.author.displayName || ref.author.username;
+      replyPrefix = `[Reply to ${refAuthor}] `;
+    } catch {
+      // deleted message
+    }
+  }
+
   // Replying to a bot message counts as a trigger (conversation continuation)
-  if (channel.requiresTrigger && !isReplyToBot && !triggerPattern.test(content)) {
+  if (channel.requiresTrigger && !isReplyToBot && !hasTrigger) {
     logger.debug({ jid }, 'Message does not match trigger, ignoring');
     return;
   }
 
-  // Strip trigger prefix from content sent to agent
+  // Strip trigger prefix from content sent to agent (before the reply prefix,
+  // so the trigger stays anchored at the start of the original content)
   content = content.replace(triggerPattern, '').trim();
   if (!content && acceptedAttachments.length > 0) {
     content = buildAttachmentOnlyPrompt(acceptedAttachments.length);
+  }
+  if (replyPrefix) {
+    content = `${replyPrefix}${content}`;
   }
   if (!content) return;
 
@@ -281,6 +301,24 @@ async function handleMessage(message: Message): Promise<void> {
     attachments: attachmentsJson,
   });
   logger.info({ jid, sender: senderName, len: content.length }, 'Message enqueued');
+}
+
+/**
+ * Bot-peer loop guard, pure: keep timestamps inside the sliding window and
+ * decide whether this message is accepted. Only accepted messages are
+ * recorded, so the ban cannot self-aliment while the peer keeps talking.
+ */
+export function recordBotPeerMessage(
+  times: number[] | undefined,
+  now: number,
+  cfg: { max: number; windowMs: number },
+): { times: number[]; accepted: boolean } {
+  const kept = (times ?? []).filter((t) => now - t < cfg.windowMs);
+  if (cfg.max > 0 && kept.length >= cfg.max) {
+    return { times: kept, accepted: false };
+  }
+  kept.push(now);
+  return { times: kept, accepted: true };
 }
 
 // ── Outbound ──
@@ -302,12 +340,12 @@ export async function sendResponse(jid: string, text: string): Promise<boolean> 
     const textChannel = channel as TextChannel | DMChannel;
 
     if (text.length <= DISCORD_MAX_LENGTH) {
-      await textChannel.send(text);
+      await sendChunkWithRetry(textChannel, text);
     } else {
       // Split at line boundaries when possible
       const chunks = splitMessage(text, DISCORD_MAX_LENGTH);
       for (const chunk of chunks) {
-        await textChannel.send(chunk);
+        await sendChunkWithRetry(textChannel, chunk);
       }
     }
     logger.info({ jid, length: text.length }, 'Response sent');
@@ -369,11 +407,33 @@ export function splitMessage(text: string, max: number): string[] {
     if (splitAt > 1 && /^[\uDC00-\uDFFF]/.test(remaining[splitAt] ?? '')) {
       splitAt -= 1;
     }
-    chunks.push(remaining.slice(0, splitAt));
+    let chunk = remaining.slice(0, splitAt);
     remaining = remaining.slice(splitAt).replace(/^\n/, '');
+    // Never cut a ``` fence in half: close it at the end of the chunk and
+    // reopen it at the start of the next one.
+    const openFences = (chunk.match(/^```/gm) ?? []).length;
+    if (openFences % 2 === 1 && remaining) {
+      chunk = `${chunk}\n\u0060\u0060\u0060`;
+      remaining = `\u0060\u0060\u0060${remaining}`;
+    }
+    chunks.push(chunk);
   }
   if (remaining) chunks.push(remaining);
   return chunks;
+}
+
+/** Send one chunk, retrying once after a short pause (rate-limit recovery). */
+async function sendChunkWithRetry(
+  textChannel: TextChannel | DMChannel,
+  chunk: string,
+): Promise<void> {
+  try {
+    await textChannel.send(chunk);
+  } catch (err: any) {
+    logger.warn({ err: err?.message }, 'Chunk send failed once, retrying after pause');
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await textChannel.send(chunk);
+  }
 }
 
 function escapeRegExp(text: string): string {

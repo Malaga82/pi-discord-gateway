@@ -567,6 +567,10 @@ function parseRegisterOptions(
         options.isMain = true;
         options.requiresTrigger = false;
         break;
+      default:
+        throw new Error(
+          `Unknown register option: ${args[i]}\nUsage: piscord register <channel-id> <name> [--folder <name>] [--cwd <path>] [--no-trigger] [--main]`,
+        );
     }
   }
 

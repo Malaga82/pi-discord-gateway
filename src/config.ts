@@ -138,6 +138,11 @@ function parseStreamingMode(value: string | undefined): StreamingMode {
   const v = (value || '').trim().toLowerCase();
   if (v === 'off' || v === 'false' || v === '0' || v === 'no') return 'off';
   if (['true', '1', 'yes', 'on', 'full'].includes(v)) return 'full';
+  if (v) {
+    // Unknown value: fall back to the default but say so — a silent typo here
+    // would flip streaming behavior without any hint.
+    console.warn(`[piscord] Unknown STREAMING value "${value}" — falling back to "tools"`);
+  }
   return 'tools'; // default (also for unknown values)
 }
 
@@ -222,11 +227,16 @@ export const config = {
   /** Bot-peer loop guard sliding window in ms */
   botLoopWindowMs: envInt('BOT_LOOP_WINDOW_MS', 5 * 60_000, { min: 1000 }),
 
+  /** Max time for a single agent invocation before it is killed (0 = disabled). */
+  agentTimeoutMs: envInt('AGENT_TIMEOUT_MS', 30 * 60_000, { min: 0 }),
+
   /** Live activity mode: off (nothing until done), tools (Hermes-style activity log), full (log + streamed text) */
   streaming: parseStreamingMode(readEnvValue('STREAMING')),
 
-  /** Min interval between streaming message edits (ms) */
-  streamingUpdateMs: envInt('STREAMING_UPDATE_MS', 2000, { min: 500 }),
+  /** Min interval between streaming message edits (ms).
+   * Min 1200ms: Discord allows ~5 edits / 5s per channel — anything lower
+   * just earns 429s that the throttled editor silently swallows. */
+  streamingUpdateMs: envInt('STREAMING_UPDATE_MS', 2000, { min: 1200 }),
 } as const;
 
 export type Config = typeof config;
