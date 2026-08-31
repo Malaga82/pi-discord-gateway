@@ -9,7 +9,7 @@
 import { createWriteStream, mkdirSync, readdirSync, rmSync, statSync, type Dirent } from 'node:fs';
 import { rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Readable } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { type AttachmentMeta } from '../discord/attachments.js';
 import { config } from '../config.js';
@@ -116,8 +116,16 @@ async function streamAttachmentToFile(
     }
 
     const body = Readable.fromWeb(res.body as any);
-    body.on('data', armStall); // progress resets the stall watchdog
-    await pipeline(body, createWriteStream(filePath), { signal });
+    // Progress watchdog as a transform stage: attaching a 'data' listener
+    // would flip the stream to flowing mode before pipeline attaches, which
+    // only works by accident when pipeline runs in the same tick.
+    const progress = new Transform({
+      transform(chunk: Buffer, _enc, callback) {
+        armStall();
+        callback(null, chunk);
+      },
+    });
+    await pipeline(body, progress, createWriteStream(filePath), { signal });
   } finally {
     if (stallTimer) clearTimeout(stallTimer);
   }

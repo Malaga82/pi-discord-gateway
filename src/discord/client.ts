@@ -399,38 +399,65 @@ export function splitMessage(text: string, max: number): string[] {
   const chunks: string[] = [];
   let remaining = text;
 
+  const isLowSurrogate = (i: number) =>
+    i > 1 && /^[\uDC00-\uDFFF]/.test(remaining[i] ?? '');
+
   while (remaining.length > max) {
     // Try to split at last newline within limit
     let splitAt = remaining.lastIndexOf('\n', max);
     if (splitAt <= 0) splitAt = max; // hard split if no newline
     // Never cut a UTF-16 surrogate pair in half (would corrupt emoji).
-    if (splitAt > 1 && /^[\uDC00-\uDFFF]/.test(remaining[splitAt] ?? '')) {
-      splitAt -= 1;
-    }
+    if (isLowSurrogate(splitAt)) splitAt -= 1;
+
     let chunk = remaining.slice(0, splitAt);
-    remaining = remaining.slice(splitAt).replace(/^\n/, '');
+    let rest = remaining.slice(splitAt).replace(/^\n/, '');
+    let fenceLines = chunk.match(/^```.*$/gm) ?? [];
+
     // Never cut a ``` fence in half: close it at the end of the chunk and
-    // reopen it at the start of the next one.
-    const openFences = (chunk.match(/^```/gm) ?? []).length;
-    if (openFences % 2 === 1 && remaining) {
-      chunk = `${chunk}\n\u0060\u0060\u0060`;
-      remaining = `\u0060\u0060\u0060${remaining}`;
+    // reopen it (same tag line) at the start of the next one. The closing
+    // "\n```" needs 4 chars of budget, and the split must consume MORE than
+    // the reopen prefix adds, or `remaining` would grow and loop forever
+    // (degenerate case: the only newline nearby is the fence line itself).
+    if (fenceLines.length % 2 === 1 && rest) {
+      const openFence = fenceLines[fenceLines.length - 1] ?? '```';
+      const minSplit = openFence.length + 2;
+      if (chunk.length > max - 4 || splitAt < minSplit) {
+        splitAt = max - 4;
+        if (isLowSurrogate(splitAt)) splitAt -= 1;
+        chunk = remaining.slice(0, splitAt);
+        rest = remaining.slice(splitAt);
+        fenceLines = chunk.match(/^```.*$/gm) ?? [];
+      }
+      if (fenceLines.length % 2 === 1) {
+        chunk = `${chunk}\n\u0060\u0060\u0060`;
+        rest = `${openFence}\n${rest.replace(/^\n/, '')}`;
+      }
     }
+
     chunks.push(chunk);
+    remaining = rest;
   }
   if (remaining) chunks.push(remaining);
   return chunks;
 }
 
-/** Send one chunk, retrying once after a short pause (rate-limit recovery). */
-async function sendChunkWithRetry(
+/** Send one chunk, retrying transient failures (429 / 5xx / network) once
+ * after a short pause. Non-transient errors (400/403/…) fail fast: a retry
+ * would just burn 1.5s and fail identically. */
+export async function sendChunkWithRetry(
   textChannel: TextChannel | DMChannel,
   chunk: string,
 ): Promise<void> {
   try {
     await textChannel.send(chunk);
   } catch (err: any) {
-    logger.warn({ err: err?.message }, 'Chunk send failed once, retrying after pause');
+    const status: unknown = err?.status;
+    const transient =
+      status === undefined ||
+      status === 429 ||
+      (typeof status === 'number' && status >= 500);
+    if (!transient) throw err;
+    logger.warn({ err: err?.message, status }, 'Chunk send failed once, retrying after pause');
     await new Promise((resolve) => setTimeout(resolve, 1500));
     await textChannel.send(chunk);
   }

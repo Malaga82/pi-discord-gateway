@@ -23,6 +23,39 @@ function makeHandle(edit: (content: string) => Promise<void>): StreamHandle {
 }
 
 describe('stripDuplicateTail', () => {
+  it('strips a long (>500 char, truncated in the log) single-block final answer', () => {
+    const state = createStreamState();
+    const longAnswer = 'Risposta finale abbastanza lunga. '.repeat(30); // ~1k chars
+    applyEvent(state, {
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: longAnswer }] },
+    });
+    // condense() truncated the log entry to 500 chars + '…' (a PREFIX of the answer).
+    expect(state.log[0].text.endsWith('…')).toBe(true);
+
+    stripDuplicateTail(state, longAnswer);
+    expect(renderLog(state)).toBe('');
+  });
+
+  it('strips multi-block answers whose LAST block is long (positional truncated match)', () => {
+    const state = createStreamState();
+    const shortBlock = 'Breve introduzione.';
+    const longBlock = 'Conclusione dettagliata e molto lunga. '.repeat(30);
+    applyEvent(state, {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: shortBlock },
+          { type: 'text', text: longBlock },
+        ],
+      },
+    });
+
+    stripDuplicateTail(state, `${shortBlock}\n${longBlock}`);
+    expect(renderLog(state)).toBe('');
+  });
+
   it('strips a single-block final answer from the log tail', () => {
     const state = createStreamState();
     applyEvent(state, {

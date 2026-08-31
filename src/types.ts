@@ -34,4 +34,6 @@ export interface AgentResult {
   error?: string;
   /** pi was SIGTERM'd/SIGKILL'd (shutdown/restart/abort) — not a real failure */
   killed?: boolean;
+  /** Invocation exceeded AGENT_TIMEOUT_MS (error reported, activity log preserved) */
+  timedOut?: boolean;
 }

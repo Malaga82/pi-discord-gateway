@@ -285,13 +285,14 @@ function loadModelCatalog(forceRefresh: boolean, cwd: string, allowStale: boolea
   }
   if (!forceRefresh) {
     // No cache at all on the hot path (e.g. a channel with a brand-new cwd):
-    // serve an empty placeholder — the model ref is still passed through raw —
-    // and load asynchronously. Only forceRefresh callers (startup, tests,
-    // explicit refreshes) pay the synchronous spawn cost.
+    // serve an empty, UNCACHED placeholder — the model ref still passes
+    // through raw — and load asynchronously. Not caching it lets callers ask
+    // hasCachedModelCatalog() to detect "no real catalog yet" (queue.ts waits
+    // for the first refresh so thinking clamping is not skipped). Only
+    // forceRefresh callers (startup, tests, explicit refreshes) pay the
+    // synchronous spawn cost.
     void refreshModelCatalogAsync(cwd);
-    const placeholder: ModelCache = { loadedAt: now, cwd, models: [] };
-    cacheByCwd.set(cwd, placeholder);
-    return placeholder;
+    return { loadedAt: now, cwd, models: [] };
   }
   const registry = createModelRegistry();
   const sdkModels = registry.getAvailable().map(toAvailableModelInfo);

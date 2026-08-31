@@ -119,7 +119,7 @@ describe('recordBotPeerMessage (loop guard)', () => {
 });
 
 describe('invokeAgent timeout (P11)', () => {
-  it('kills a hung pi and reports a timeout error instead of holding the channel forever', async () => {
+  it('kills a hung pi, flags timedOut and reports a timeout error', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'pidg-timeout-'));
     try {
       const fakePi = join(dir, 'fake-pi.sh');
@@ -135,11 +135,40 @@ describe('invokeAgent timeout (P11)', () => {
       const result = await invokeAgent('ch_test', 'hello');
       expect(result.ok).toBe(false);
       expect(result.error).toMatch(/timed out after 400ms/);
+      expect(result.timedOut).toBe(true);
       expect(result.killed).toBeFalsy();
     } finally {
       rmSync(dir, { recursive: true, force: true });
       delete process.env.PI_BIN;
       delete process.env.AGENT_TIMEOUT_MS;
+    }
+  });
+});
+
+describe('plain-text fallback with streaming consumer (R2)', () => {
+  it('recovers the plain-text answer when pi ignores --mode json', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pidg-plain-'));
+    try {
+      const fakePi = join(dir, 'fake-pi.sh');
+      writeFileSync(fakePi, '#!/bin/sh\necho "risposta in chiaro"\n');
+      chmodSync(fakePi, 0o755);
+
+      process.env.PI_BIN = fakePi;
+      process.env.SESSIONS_DIR = join(dir, 'sessions');
+
+      vi.resetModules();
+      const { invokeAgent } = await import('../src/agent/invoke.js');
+      const events: unknown[] = [];
+      const result = await invokeAgent('ch_plain', 'hello', {
+        onEvent: (event) => events.push(event),
+      });
+      expect(result.ok).toBe(true);
+      expect(result.text).toBe('risposta in chiaro');
+      expect(events).toHaveLength(0); // no JSON events were produced
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      delete process.env.PI_BIN;
+      delete process.env.SESSIONS_DIR;
     }
   });
 });

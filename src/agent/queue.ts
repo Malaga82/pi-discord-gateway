@@ -26,7 +26,10 @@ import {
   pushStreamEvent,
   startStreamMessage,
 } from '../discord/streaming.js';
-import { computeEffectiveChannelSettings } from './channel-settings.js';
+import {
+  computeEffectiveChannelSettings,
+} from './channel-settings.js';
+import { hasCachedModelCatalog, refreshModelCatalogAsync } from './model-catalog.js';
 
 /** Channels currently being processed (per-channel serial lock) */
 const activeChannels = new Set<string>();
@@ -219,6 +222,14 @@ async function processMessage(
 
     logMessage(jid, 'user', content);
 
+    // First message on a brand-new cwd: wait for the async catalog load
+    // (non-blocking) so thinking clamping and model validation are not
+    // skipped on this very message.
+    const desiredCwd = channel.cwdOverride || config.piCwd;
+    if (!hasCachedModelCatalog(desiredCwd)) {
+      await refreshModelCatalogAsync(desiredCwd);
+    }
+
     const effective = computeEffectiveChannelSettings(channel);
 
     const result = await invokeAgent(channel.folder, prompt, {
@@ -266,6 +277,16 @@ async function processMessage(
       markMessageFailed(rowid);
       if (stream) await finalizeStream(stream, undefined);
       logger.warn({ jid, rowid, error: result.error }, 'pi killed (shutdown/restart); activity log preserved');
+      return;
+    }
+
+    if (result.timedOut) {
+      // AGENT_TIMEOUT_MS hit: report it, but keep the activity log of the
+      // tools that did run before the kill.
+      markMessageFailed(rowid);
+      if (stream) await finalizeStream(stream, undefined);
+      await sendResponse(jid, `⚠️ ${result.error}`);
+      logger.warn({ jid, rowid, error: result.error }, 'Agent invocation timed out');
       return;
     }
 

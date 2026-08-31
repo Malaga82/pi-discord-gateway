@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.3] - 2026-08-31
+
+### Fixed — regressions introduced in 1.8.2
+
+- **`stripDuplicateTail` again strips long (>500 char) answers**: condense() truncates log entries to a 500-char prefix, so a suffix-only check never matched them and every long answer appeared twice (truncated copy in the log + full answer below). Truncated entries now match positionally at their block's start (first occurrence); complete entries keep the suffix match; multi-block answers with repetitive content and the preamble-preservation case are covered by tests.
+- **Plain-text fallback restored in streaming mode**: stdout is buffered until the first valid JSON event arrives (then buffering stops), so a pi that ignores `--mode json` (old binary, format change) is answered from its plain output instead of failing with "empty stdout".
+- **Fence-aware `splitMessage` respects the 2000-char budget**: the closing `\n``` ` is reserved 4 chars of budget, the reopened fence reuses the original tag line (language preserved), and a degenerate split at the fence line itself can no longer make the remainder grow — which previously looped forever (OOM) on long fence-less-newline code blocks.
+
+### Fixed / changed — follow-ups
+
+- Agent timeout (`AGENT_TIMEOUT_MS`) reports a dedicated `timedOut` result; the queue preserves the activity log and posts an explicit ⚠️ timeout message instead of cancelling the placeholder.
+- The empty first-load catalog placeholder is no longer cached, and the queue awaits the first async catalog load for a brand-new cwd — thinking clamping and model validation are no longer skipped on the very first message.
+- The attachment stall watchdog is a pipeline transform stage instead of a `data` listener (no flowing-mode fragility).
+- `flushNow`'s deferred reschedule now arms the timer after `editing` clears (the in-loop `scheduleFlush` call was a no-op while editing), so a late event batch during throttling is eventually rendered.
+- `sendChunkWithRetry` retries only transient failures (429 / 5xx / network); 400/403 fail fast.
+
 ## [1.8.2] - 2026-08-31
 
 ### Fixed — response correctness

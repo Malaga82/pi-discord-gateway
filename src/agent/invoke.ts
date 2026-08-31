@@ -174,7 +174,8 @@ export async function invokeAgent(
 
     // Incremental JSONL parsing for streaming mode. If pi produces no valid
     // JSON events (older binary, changed output format) we fall back to the
-    // legacy plain-text handling below.
+    // legacy plain-text handling below — stdout keeps being buffered until
+    // the first valid event arrives, so the fallback stays available.
     let sawJson = false;
     let finalText = '';
     const reader = createJsonLineReader((line) => {
@@ -198,7 +199,9 @@ export async function invokeAgent(
 
     proc.stdout.on('data', (c: Buffer) => {
       if (onEvent) reader.push(c);
-      else chunks.push(c);
+      // Buffer for the plain-text fallback until the first valid JSON event
+      // proves pi honored --mode json; after that the buffer is dead weight.
+      if (!sawJson) chunks.push(c);
     });
     proc.stderr.on('data', (c: Buffer) => errChunks.push(c));
 
@@ -256,6 +259,7 @@ export async function invokeAgent(
           ok: false,
           text: '',
           error: `Agent invocation timed out after ${config.agentTimeoutMs}ms`,
+          timedOut: true,
         });
         return;
       }

@@ -36,22 +36,20 @@ describe('splitMessage', () => {
     expect(splitMessage('hello 😀', 2000)).toEqual(['hello 😀']);
   });
 
-  it('closes and reopens ``` fences cut by a hard split', () => {
-    const body = 'x'.repeat(1500);
-    const text = `intro\n\`\`\`js\n${body}\n${body}\n\`\`\`\noutro`;
+  it('closes and reopens ``` fences cut by a hard split, within the length budget, preserving the language tag', () => {
+    const text = '```js\n' + 'x'.repeat(6000) + '\n```\n';
     const chunks = splitMessage(text, 2000);
 
     expect(chunks.length).toBeGreaterThan(1);
     for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(2000); // never bust Discord's limit
       const fences = (chunk.match(/^```/gm) ?? []).length;
       expect(fences % 2).toBe(0); // balanced fences in every chunk
     }
-    // Content survives (modulo the added fence markers and the dropped boundary newline).
-    const reassembled = chunks
-      .join('\n')
-      .replace(/^```\n/gm, '')
-      .replace(/\n```$/gm, '')
-      .replace(/```/g, '');
-    expect(reassembled.replace(/\s+/g, '')).toContain(body.repeat(2).slice(0, 500));
+    // The reopened fence carries the original language tag.
+    expect(chunks[1].startsWith('```js\n')).toBe(true);
+    // Content survives reassembly (modulo added fences).
+    const reassembled = chunks.join('').replace(/```js\n|\n?```/g, '');
+    expect(reassembled.replace(/\s+/g, '')).toBe('x'.repeat(6000));
   });
 });

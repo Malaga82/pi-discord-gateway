@@ -3,6 +3,7 @@ import type { Model } from '@earendil-works/pi-ai';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   __setCachedModelRuntimeForTests,
+  hasCachedModelCatalog,
   isModelCatalogStale,
   listAvailableModels,
   listSelectableModels,
@@ -240,9 +241,11 @@ describe('loadModelCatalog first-load (hot path)', () => {
     const immediate = listAvailableModels({ cwd });
     expect(immediate).toEqual([]); // placeholder, no sync spawn
     expect(spawnSyncMock).not.toHaveBeenCalled();
+    expect(hasCachedModelCatalog(cwd)).toBe(false); // placeholder is NOT cached
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(execFileMock).toHaveBeenCalled();
+    expect(hasCachedModelCatalog(cwd)).toBe(true); // real catalog cached by the async refresh
     const filled = listAvailableModels({ allowStale: true, cwd });
     expect(filled.map((model) => model.ref).sort()).toEqual(['other/gamma', 'test/alpha', 'test/beta']);
   });

@@ -304,6 +304,7 @@ function scheduleFlush(handle: StreamHandle): void {
 
 async function flushNow(handle: StreamHandle): Promise<void> {
   if (!handle.message || handle.done || handle.flushInFlight) return;
+  let reschedule = false;
   const run = (async () => {
     handle.editing = true;
     try {
@@ -319,7 +320,7 @@ async function flushNow(handle: StreamHandle): Promise<void> {
         if (handle.needsFlush) {
           const minInterval = config.streamingUpdateMs || MIN_EDIT_INTERVAL_MS_DEFAULT;
           if (Date.now() - handle.lastEdit < minInterval || handle.done) {
-            scheduleFlush(handle);
+            reschedule = true; // scheduleFlush is a no-op while editing=true
             break;
           }
         }
@@ -328,6 +329,9 @@ async function flushNow(handle: StreamHandle): Promise<void> {
       logger.debug({ jid: handle.jid, err: err?.message }, 'Streaming edit failed (continuing)');
     } finally {
       handle.editing = false;
+      if (reschedule && !handle.done) {
+        scheduleFlush(handle); // now that editing is false this actually arms the timer
+      }
     }
   })();
   handle.flushInFlight = run;
@@ -340,25 +344,42 @@ async function flushNow(handle: StreamHandle): Promise<void> {
 }
 
 /**
- * Remove trailing log entries that duplicate the tail of the final answer:
+ * Remove trailing log entries that duplicate the final answer:
  * in tools mode the final assistant message's text blocks get pushed to the
  * log as if they were interstitial commentary; the answer must not appear
- * twice. Handles multi-block finals: pops trailing text entries one by one
- * while their concatenation remains a suffix of the final answer.
+ * twice.
+ *
+ * Matching, walking backwards over the trailing text entries:
+ * - complete entries must be a suffix of the (remaining) answer;
+ * - truncated entries (condense() cut them at 500 chars and appended '…')
+ *   are a PREFIX of their block: they match at the block's START, so the
+ *   FIRST occurrence (indexOf) — the last one would land inside repeated
+ *   content within the same block. The common single-block >500 answer ends
+ *   up here, and a plain startsWith/endsWith check would miss it.
  */
 export function stripDuplicateTail(state: StreamState, final?: string): void {
   if (!final) return;
-  const normFinal = final.replace(/\s+/gu, ' ').trim();
-  const run: string[] = [];
+  let remaining = final.replace(/\s+/gu, ' ').trim();
   while (state.log.length > 0) {
     const last = state.log[state.log.length - 1];
     if (last.kind !== 'text') break;
-    run.unshift(last.text.replace(/…+$/u, '').trim());
-    const joined = run.join(' ').replace(/\s+/gu, ' ').trim();
-    if (!joined || !normFinal.endsWith(joined)) {
-      run.shift(); // this entry is not part of the final answer — keep it
-      break;
+    const truncated = /…$/u.test(last.text.trim());
+    const probe = last.text.replace(/…+$/u, '').trim();
+    if (!probe || !remaining) break;
+
+    let consumed = false;
+    if (truncated) {
+      const idx = remaining.indexOf(probe);
+      if (idx !== -1) {
+        remaining = remaining.slice(0, idx).trim();
+        consumed = true;
+      }
+    } else if (remaining.endsWith(probe)) {
+      remaining = remaining.slice(0, remaining.length - probe.length).trim();
+      consumed = true;
     }
+
+    if (!consumed) break;
     state.log.pop();
   }
 }
