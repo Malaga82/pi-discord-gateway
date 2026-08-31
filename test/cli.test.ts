@@ -99,6 +99,69 @@ describe('send command', () => {
   });
 });
 
+describe('register command option validation', () => {
+  it('rejects --folder without a value', async () => {
+    vi.resetModules();
+    const { main } = await import('../src/cli/index.js');
+
+    await expect(main(['register', '123', 'name', '--folder'])).rejects.toThrow(
+      '--folder requires a value.',
+    );
+  });
+
+  it('rejects --cwd without a value', async () => {
+    vi.resetModules();
+    const { main } = await import('../src/cli/index.js');
+
+    await expect(main(['register', '123', 'name', '--cwd'])).rejects.toThrow(
+      '--cwd requires a value.',
+    );
+  });
+});
+
+describe('task add command channel validation', () => {
+  it('rejects tasks for unregistered channels and accepts them once registered', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'pidg-task-'));
+    tempDirs.push(tempDir);
+
+    process.env.DB_PATH = resolve(tempDir, 'gateway.db');
+    process.env.SESSIONS_DIR = resolve(tempDir, 'sessions');
+
+    vi.resetModules();
+    const { main } = await import('../src/cli/index.js');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const taskArgs = [
+      'task',
+      'add',
+      '--name',
+      'daily',
+      '--schedule',
+      '2099-01-01T00:00:00Z',
+      '--channel',
+      '123',
+      '--prompt',
+      'hello',
+      '--once',
+    ];
+
+    await expect(main(taskArgs)).rejects.toThrow('Channel not registered: dc:123');
+
+    await expect(main(['register', '123', 'test #chan'])).resolves.toBe(0);
+    await expect(main(taskArgs)).resolves.toBe(0);
+
+    const db = await import('../src/db.js');
+    db.initDb();
+    try {
+      const tasks = db.listScheduledTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].channel_jid).toBe('dc:123');
+    } finally {
+      db.closeDb();
+    }
+  });
+});
+
 describe('register command cwd support', () => {
   it('stores a per-channel cwd override and shows it in channel listings', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'pidg-cli-'));

@@ -1,18 +1,24 @@
-import { AuthStorage, ModelRegistry, SettingsManager } from '@earendil-works/pi-coding-agent';
+import { SettingsManager } from '@earendil-works/pi-coding-agent';
 import type { Model } from '@earendil-works/pi-ai';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  __setCachedModelRuntimeForTests,
   isModelCatalogStale,
+  listAvailableModels,
   listSelectableModels,
   parsePiModelList,
 } from '../src/agent/model-catalog.js';
 import { config } from '../src/config.js';
 
-const { spawnSyncMock } = vi.hoisted(() => ({ spawnSyncMock: vi.fn() }));
+const { spawnSyncMock, execFileMock } = vi.hoisted(() => ({
+  spawnSyncMock: vi.fn(),
+  execFileMock: vi.fn(),
+}));
 
 vi.mock('node:child_process', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:child_process')>()),
   spawnSync: spawnSyncMock,
+  execFile: execFileMock,
 }));
 
 const models = [
@@ -43,21 +49,21 @@ test     beta   128K     16K      yes       no
 `;
 
 function mockPiCatalog(enabledModels?: string[], cliOutput = defaultCliOutput): void {
-  const authStorage = { reload: vi.fn() } as unknown as AuthStorage;
-  const registry = {
-    refresh: vi.fn(),
-    getAvailable: vi.fn(() => models),
-  } as unknown as ModelRegistry;
+  const fakeRuntime = {
+    getAvailableSnapshot: () => models,
+    getModels: () => models,
+  } as unknown as Parameters<typeof __setCachedModelRuntimeForTests>[0];
 
+  __setCachedModelRuntimeForTests(fakeRuntime);
   spawnSyncMock.mockReturnValue({ status: 0, stdout: cliOutput, stderr: '' });
-  vi.spyOn(AuthStorage, 'create').mockReturnValue(authStorage);
-  vi.spyOn(ModelRegistry, 'create').mockReturnValue(registry);
   vi.spyOn(SettingsManager, 'create').mockReturnValue(SettingsManager.inMemory({ enabledModels }));
 }
 
 afterEach(() => {
+  __setCachedModelRuntimeForTests(null);
   vi.restoreAllMocks();
   spawnSyncMock.mockReset();
+  execFileMock.mockReset();
 });
 
 describe('listSelectableModels', () => {
@@ -175,6 +181,45 @@ describe('isModelCatalogStale', () => {
 
       vi.advanceTimersByTime(31_000);
       expect(isModelCatalogStale('/tmp/stale-check')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('loadModelCatalog stale-while-revalidate', () => {
+  it('serves the stale cache without a blocking spawn and refreshes in the background', async () => {
+    mockPiCatalog();
+    const cwd = '/tmp/swr-check';
+    const first = listAvailableModels({ forceRefresh: true, cwd });
+    expect(first.map((model) => model.ref)).toEqual(['other/gamma', 'test/alpha', 'test/beta']);
+
+    const refreshedOutput =
+      'provider  model  context  max-out  thinking  images\nother    gamma  128K     16K      yes       no\n';
+    execFileMock.mockImplementation(
+      (_bin: string, _args: string[], _opts: unknown, cb: (err: unknown, stdout: string) => void) => {
+        cb(null, refreshedOutput);
+      },
+    );
+
+    // Fake only Date.now so the cache reads as expired while timers stay real.
+    const realNow = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(realNow + 31_000);
+      spawnSyncMock.mockClear();
+
+      const stale = listAvailableModels({ cwd });
+      expect(stale.map((model) => model.ref)).toEqual(['other/gamma', 'test/alpha', 'test/beta']);
+      expect(spawnSyncMock).not.toHaveBeenCalled();
+
+      // Let the background execFile refresh settle.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(execFileMock).toHaveBeenCalled();
+      expect(isModelCatalogStale(cwd)).toBe(false);
+      const refreshed = listAvailableModels({ cwd });
+      expect(refreshed.map((model) => model.ref)).toEqual(['other/gamma']);
     } finally {
       vi.useRealTimers();
     }

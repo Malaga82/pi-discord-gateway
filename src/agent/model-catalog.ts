@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { ModelRegistry, ModelRuntime, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { minimatch } from 'minimatch';
 import { config } from '../config.js';
@@ -36,6 +36,8 @@ const CACHE_TTL_MS = 30_000;
 const LIST_MODELS_TIMEOUT_MS = 15_000;
 
 const cacheByCwd = new Map<string, ModelCache>();
+// Background catalog refreshes in flight (stale-while-revalidate for the hot message path).
+const backgroundRefreshes = new Set<string>();
 
 export function listAvailableModels(options?: {
   forceRefresh?: boolean;
@@ -259,6 +261,13 @@ function loadModelCatalog(forceRefresh: boolean, cwd: string, allowStale: boolea
   if (!forceRefresh && cached && (allowStale || now - cached.loadedAt < CACHE_TTL_MS)) {
     return cached;
   }
+  if (!forceRefresh && cached) {
+    // Stale-while-revalidate: serve the cached catalog immediately and refresh
+    // off the hot path — a blocking `pi --list-models` here would stall the
+    // event loop (and Discord heartbeats) for seconds on every TTL expiry.
+    scheduleBackgroundRefresh(cwd);
+    return cached;
+  }
   const registry = createModelRegistry();
   const sdkModels = registry.getAvailable().map(toAvailableModelInfo);
   const cliModels = listModelsFromPiCli(config.piBin, cwd);
@@ -270,12 +279,33 @@ function loadModelCatalog(forceRefresh: boolean, cwd: string, allowStale: boolea
   return refreshed;
 }
 
-function listModelsFromPiCli(piBin: string, cwd: string): AvailableModelInfo[] | undefined {
+function scheduleBackgroundRefresh(cwd: string): void {
+  if (backgroundRefreshes.has(cwd)) return;
+  backgroundRefreshes.add(cwd);
+  void listModelsFromPiCliAsync(config.piBin, cwd)
+    .then((cliModels) => {
+      if (!cliModels) return;
+      const registry = createModelRegistry();
+      const sdkModels = registry.getAvailable().map(toAvailableModelInfo);
+      const models = mergeModelMetadata(cliModels, sdkModels).sort((a, b) =>
+        a.ref.localeCompare(b.ref),
+      );
+      cacheByCwd.set(cwd, { loadedAt: Date.now(), cwd, models });
+    })
+    .catch(() => undefined)
+    .finally(() => backgroundRefreshes.delete(cwd));
+}
+
+function buildListModelArgs(piBin: string): { bin: string; args: string[] } {
   const cliArgs = ['--list-models'];
   if (config.piExtraFlags) {
     cliArgs.push(...config.piExtraFlags.split(/\s+/).filter(Boolean));
   }
-  const { bin, args } = resolvePiSpawn(piBin, cliArgs);
+  return resolvePiSpawn(piBin, cliArgs);
+}
+
+function listModelsFromPiCli(piBin: string, cwd: string): AvailableModelInfo[] | undefined {
+  const { bin, args } = buildListModelArgs(piBin);
   const result = spawnSync(bin, args, {
     cwd,
     env: process.env,
@@ -288,6 +318,30 @@ function listModelsFromPiCli(piBin: string, cwd: string): AvailableModelInfo[] |
     return undefined;
   }
   return parsePiModelList(result.stdout);
+}
+
+function listModelsFromPiCliAsync(piBin: string, cwd: string): Promise<AvailableModelInfo[] | undefined> {
+  const { bin, args } = buildListModelArgs(piBin);
+  return new Promise((resolve) => {
+    execFile(
+      bin,
+      args,
+      {
+        cwd,
+        env: process.env,
+        encoding: 'utf8',
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: LIST_MODELS_TIMEOUT_MS,
+      },
+      (err, stdout) => {
+        if (err || !stdout?.trim()) {
+          resolve(undefined);
+          return;
+        }
+        resolve(parsePiModelList(stdout));
+      },
+    );
+  });
 }
 
 function findModelTableHeader(lines: string[]): {
@@ -369,7 +423,12 @@ function ensureModelRuntime(): void {
   runtimeInitPromise = ModelRuntime.create()
     .then((runtime) => {
       cachedRuntime = runtime;
-      cacheByCwd.clear();
+      // SDK metadata is now available: refresh known catalogs in the background.
+      // Never clear the cache here — an empty cache forces the hot message path
+      // back onto the blocking sync `pi --list-models` load.
+      for (const cwd of cacheByCwd.keys()) {
+        scheduleBackgroundRefresh(cwd);
+      }
       return runtime;
     })
     .catch((err: unknown) => {

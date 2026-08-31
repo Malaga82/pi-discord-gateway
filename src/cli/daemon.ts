@@ -1,7 +1,7 @@
-import { spawnSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defaultDataDir, resolveConfigPath } from '../config.js';
 
@@ -57,31 +57,93 @@ function linuxInstall(): void {
   mkdirSync(SYSTEMD_USER_DIR, { recursive: true });
   writeFileSync(
     SYSTEMD_SERVICE_PATH,
-    [
-      '[Unit]',
-      'Description=Pi Discord Gateway',
-      'After=network-online.target',
-      'Wants=network-online.target',
-      '',
-      '[Service]',
-      'Type=simple',
-      `WorkingDirectory=${homedir()}`,
-      `ExecStart=${nodePath} ${cliPath} start`,
-      'Restart=on-failure',
-      'RestartSec=10',
-      'StandardOutput=journal',
-      'StandardError=journal',
-      `Environment=PIDG_CONFIG=${configPath}`,
-      '',
-      '[Install]',
-      'WantedBy=default.target',
-      '',
-    ].join('\n'),
+    buildLinuxServiceUnit({
+      nodePath,
+      cliPath,
+      configPath,
+      homeDir: homedir(),
+      execStartPre: buildPeerSymlinkExecStartPre(cliPath),
+    }),
   );
 
   console.log(`Installed service file: ${SYSTEMD_SERVICE_PATH}`);
   run('systemctl', ['--user', 'daemon-reload']);
   run('systemctl', ['--user', 'enable', SERVICE_NAME]);
+}
+
+/** Build the [Service]/[Unit]/[Install] unit text (exported for tests). */
+export function buildLinuxServiceUnit(options: {
+  nodePath: string;
+  cliPath: string;
+  configPath: string;
+  homeDir: string;
+  execStartPre?: string;
+}): string {
+  return [
+    '[Unit]',
+    'Description=Pi Discord Gateway',
+    'After=network-online.target',
+    'Wants=network-online.target',
+    '',
+    '[Service]',
+    'Type=simple',
+    `WorkingDirectory=${options.homeDir}`,
+    ...(options.execStartPre ? [options.execStartPre] : []),
+    `ExecStart=${options.nodePath} ${options.cliPath} start`,
+    'Restart=on-failure',
+    'RestartSec=10',
+    'StandardOutput=journal',
+    'StandardError=journal',
+    `Environment=PIDG_CONFIG=${options.configPath}`,
+    '',
+    '[Install]',
+    'WantedBy=default.target',
+    '',
+  ].join('\n');
+}
+
+/**
+ * pi installs its packages under ~/.pi/agent/npm/node_modules, which has no
+ * @earendil-works peers; they live in the global npm root instead. After a pi
+ * upgrade the peer symlinks there can vanish and the service stops resolving
+ * them. Emit an ExecStartPre that (re)creates the symlinks with absolute paths.
+ * Returns undefined when the layout does not need it (regular npm install).
+ */
+export function buildPeerSymlinkExecStartPre(
+  cliPath: string,
+  options: { globalRoot?: string; fsExists?: (path: string) => boolean } = {},
+): string | undefined {
+  const exists = options.fsExists ?? existsSync;
+  // cliPath = <node_modules>/piscord/dist/cli/index.js -> node_modules root (4 up)
+  const nodeModulesRoot = dirname(dirname(dirname(dirname(cliPath))));
+  if (!nodeModulesRoot.endsWith('node_modules')) return undefined;
+
+  let globalRoot = options.globalRoot;
+  if (globalRoot === undefined) {
+    try {
+      globalRoot = execSync('npm root -g', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+        .trim();
+    } catch {
+      return undefined;
+    }
+  }
+
+  const peerDir = join(globalRoot, '@earendil-works');
+  const codingAgent = join(peerDir, 'pi-coding-agent');
+  if (!exists(codingAgent)) return undefined;
+
+  const piAiNested = join(codingAgent, 'node_modules', '@earendil-works', 'pi-ai');
+  const piAiTop = join(peerDir, 'pi-ai');
+  const piAi = exists(piAiNested) ? piAiNested : exists(piAiTop) ? piAiTop : undefined;
+
+  const linkDir = join(nodeModulesRoot, '@earendil-works');
+  const q = (path: string) => `"${path}"`;
+  const links = [`ln -sfn ${q(codingAgent)} ${q(join(linkDir, 'pi-coding-agent'))}`];
+  if (piAi) {
+    links.push(`ln -sfn ${q(piAi)} ${q(join(linkDir, 'pi-ai'))}`);
+  }
+
+  return `ExecStartPre=/bin/sh -c 'mkdir -p ${q(linkDir)} && ${links.join(' && ')}'`;
 }
 
 function linuxUninstall(): void {

@@ -132,8 +132,7 @@ function parseChannelPolicy(value: string): ChannelPolicy {
   return 'allowlist';
 }
 
-const VALID_STREAMING_MODES = ['off', 'tools', 'full'] as const;
-type StreamingMode = (typeof VALID_STREAMING_MODES)[number];
+type StreamingMode = 'off' | 'tools' | 'full';
 
 function parseStreamingMode(value: string | undefined): StreamingMode {
   const v = (value || '').trim().toLowerCase();

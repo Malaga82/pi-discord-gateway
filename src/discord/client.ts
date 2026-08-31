@@ -117,6 +117,15 @@ async function handleMessage(message: Message): Promise<void> {
     const times = (botPeerMsgTimes.get(guardKey) ?? []).filter(
       (t) => now - t < config.botLoopWindowMs,
     );
+    // ponytail: opportunistic sweep instead of a periodic timer — bounds the map
+    // when many peer×channel keys accumulate.
+    if (botPeerMsgTimes.size > 1000) {
+      for (const [key, stamps] of botPeerMsgTimes) {
+        if (!stamps.some((t) => now - t < config.botLoopWindowMs)) {
+          botPeerMsgTimes.delete(key);
+        }
+      }
+    }
     times.push(now);
     botPeerMsgTimes.set(guardKey, times);
     if (config.botLoopMax > 0 && times.length > config.botLoopMax) {
@@ -348,7 +357,7 @@ export function getBotTag(): string | undefined {
 
 // ── Helpers ──
 
-function splitMessage(text: string, max: number): string[] {
+export function splitMessage(text: string, max: number): string[] {
   const chunks: string[] = [];
   let remaining = text;
 
@@ -356,6 +365,10 @@ function splitMessage(text: string, max: number): string[] {
     // Try to split at last newline within limit
     let splitAt = remaining.lastIndexOf('\n', max);
     if (splitAt <= 0) splitAt = max; // hard split if no newline
+    // Never cut a UTF-16 surrogate pair in half (would corrupt emoji).
+    if (splitAt > 1 && /^[\uDC00-\uDFFF]/.test(remaining[splitAt] ?? '')) {
+      splitAt -= 1;
+    }
     chunks.push(remaining.slice(0, splitAt));
     remaining = remaining.slice(splitAt).replace(/^\n/, '');
   }

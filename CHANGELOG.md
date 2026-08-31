@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.1] - 2026-08-31
+
+### Fixed
+
+- **Model catalog no longer blocks the event loop on the message path**: an expired catalog cache is now served stale while `pi --list-models` revalidates in a background subprocess, and the async `ModelRuntime` initialization no longer drops warmed caches (previously it cleared them, forcing the next message into a ~3s blocking sync load and risking Discord heartbeat stalls).
+- **`piscord daemon install` regenerates the `ExecStartPre` peer symlinks**: the generated systemd unit now (re)creates the `@earendil-works/pi-coding-agent` / `pi-ai` symlinks with absolute paths, so a pi upgrade no longer breaks the service on restart when piscord is installed under `~/.pi/agent/npm/node_modules`.
+- Slash command failures no longer leak raw error messages (which could contain absolute host paths) to Discord users; details stay in the gateway log.
+- `piscord task add` rejects schedules for unregistered channels instead of silently failing on every run.
+- Long responses are split at chunk boundaries without cutting UTF-16 surrogate pairs in half (no more corrupted emoji at the 2000-char split point).
+- `piscord register --folder` / `--cwd` without a value now fail loudly instead of being silently ignored.
+- Bot-peer loop guard state map is swept once it grows past 1000 peer×channel keys (slow memory growth).
+- Live status footer says `iteration N` instead of the hardcoded Italian `turno N`.
+
+### Changed
+
+- Unit tests for the model catalog migrated to the `ModelRuntime` test hook (`__setCachedModelRuntimeForTests`); the old `AuthStorage.create` / `ModelRegistry.create` spies no longer exist in current pi releases (10 tests were failing).
+
 ## [1.8.0] - 2026-08-30
 
 ### Added

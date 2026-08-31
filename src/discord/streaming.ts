@@ -66,7 +66,6 @@ export interface StreamHandle {
 }
 
 /** pi JSONL event (loosely typed — shape comes from the agent, not the gateway). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type PiEvent = any;
 
 export function createStreamState(): StreamState {
@@ -194,7 +193,7 @@ function firstSentence(text: string): string {
 function formatElapsed(state: StreamState): string {
   const secs = Math.max(0, Math.round((Date.now() - (state.startedAt || Date.now())) / 1000));
   const clock = secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
-  return state.turnCount > 1 ? `${clock} — turno ${state.turnCount}` : clock;
+  return state.turnCount > 1 ? `${clock} — iteration ${state.turnCount}` : clock;
 }
 
 /** Build the commentary markdown shown while the agent works. */

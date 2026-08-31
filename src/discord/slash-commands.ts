@@ -185,7 +185,9 @@ export async function handleChatCommand(interaction: ChatInputCommandInteraction
       { err: err.message, command: interaction.commandName, subcommand },
       'Slash command failed',
     );
-    const payload = reply(`⚠️ ${err.message}`, interaction);
+    // Generic message only: err.message can leak absolute paths and other
+    // host details to arbitrary Discord users.
+    const payload = reply('⚠️ Command failed — check the gateway logs for details.', interaction);
     if (interaction.replied) {
       await interaction.followUp(payload);
     } else if (interaction.deferred) {

@@ -289,12 +289,19 @@ async function cliAddTask(args: string[]): Promise<void> {
     throw new Error('Schedule does not produce a future run time.');
   }
 
-  await withDb(({ addScheduledTask }) => {
+  await withDb(({ addScheduledTask, getChannel }) => {
+    const channelJid = toDiscordChannelJid(options.channel);
+    if (!getChannel(channelJid)) {
+      throw new Error(
+        `Channel not registered: ${channelJid}. Register it first: piscord register ${options.channel} <name>`,
+      );
+    }
+
     const id = addScheduledTask({
       name: options.name,
       type: options.type,
       schedule: options.schedule,
-      channelJid: toDiscordChannelJid(options.channel),
+      channelJid,
       prompt: options.prompt,
       createdBy: 'cli',
       nextRunAt,
@@ -536,20 +543,22 @@ function parseRegisterOptions(
     isMain: false,
   };
 
+  const REGISTER_USAGE =
+    'Usage: piscord register <channel-id> <name> [--folder <name>] [--cwd <path>] [--no-trigger] [--main]';
+
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--folder':
-        if (args[i + 1]) {
-          options.folder = validateSessionFolder(args[++i]);
+        if (!args[i + 1]) {
+          throw new Error(`${REGISTER_USAGE}\n--folder requires a value.`);
         }
+        options.folder = validateSessionFolder(args[++i]);
         break;
       case '--cwd':
-        if (args[i + 1]) {
-          const cwdOverride = args[++i].trim();
-          if (cwdOverride) {
-            options.cwdOverride = cwdOverride;
-          }
+        if (!args[i + 1]) {
+          throw new Error(`${REGISTER_USAGE}\n--cwd requires a value.`);
         }
+        options.cwdOverride = args[++i].trim();
         break;
       case '--no-trigger':
         options.requiresTrigger = false;
