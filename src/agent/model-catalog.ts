@@ -3,8 +3,8 @@ import { ModelRegistry, ModelRuntime, SettingsManager } from '@earendil-works/pi
 import { minimatch } from 'minimatch';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
-import { THINKING_LEVELS, type ThinkingLevel } from "../types.js";
-import type { Model } from "@earendil-works/pi-ai";
+import { THINKING_LEVELS, type ThinkingLevel } from '../types.js';
+import type { Model } from '@earendil-works/pi-ai';
 import { supportsModelXhigh } from './pi-ai-compat.js';
 import { resolvePiSpawn, sanitizedChildEnv } from './pi-spawn.js';
 
@@ -149,7 +149,8 @@ export async function autocompleteModels(
         normalize(m.name).includes(normalized),
     )
     .sort(
-      (a, b) => scoreModelMatch(b, trimmed) - scoreModelMatch(a, trimmed) || a.ref.localeCompare(b.ref),
+      (a, b) =>
+        scoreModelMatch(b, trimmed) - scoreModelMatch(a, trimmed) || a.ref.localeCompare(b.ref),
     )
     .slice(0, limit);
 }
@@ -361,7 +362,10 @@ function listModelsFromPiCli(piBin: string, cwd: string): AvailableModelInfo[] |
   return parsePiModelList(result.stdout);
 }
 
-function listModelsFromPiCliAsync(piBin: string, cwd: string): Promise<AvailableModelInfo[] | undefined> {
+function listModelsFromPiCliAsync(
+  piBin: string,
+  cwd: string,
+): Promise<AvailableModelInfo[] | undefined> {
   const { bin, args } = buildListModelArgs(piBin);
   return new Promise((resolve) => {
     execFile(
@@ -385,12 +389,14 @@ function listModelsFromPiCliAsync(piBin: string, cwd: string): Promise<Available
   });
 }
 
-function findModelTableHeader(lines: string[]): {
-  providerIndex: number;
-  modelIndex: number;
-  thinkingIndex: number;
-  rowsStart: number;
-} | undefined {
+function findModelTableHeader(lines: string[]):
+  | {
+      providerIndex: number;
+      modelIndex: number;
+      thinkingIndex: number;
+      rowsStart: number;
+    }
+  | undefined {
   for (const [index, line] of lines.entries()) {
     const headers = line.split(/\s+/);
     const providerIndex = headers.indexOf('provider');
@@ -492,9 +498,9 @@ function createModelRegistry(): { getAvailable(): AvailableModelInfoSource[] } {
   if (cachedRuntime) {
     // ModelRegistry's constructor is declared private in pi's typings but is
     // the intended entry point at runtime (same pattern as pi internals).
-    const Registry = ModelRegistry as unknown as new (
-      runtime: ModelRuntime,
-    ) => { getAvailable(): AvailableModelInfoSource[] };
+    const Registry = ModelRegistry as unknown as new (runtime: ModelRuntime) => {
+      getAvailable(): AvailableModelInfoSource[];
+    };
     return new Registry(cachedRuntime);
   }
   ensureModelRuntime();

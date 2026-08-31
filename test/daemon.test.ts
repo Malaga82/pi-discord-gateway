@@ -11,7 +11,7 @@ describe('buildLinuxServiceUnit', () => {
       execStartPre: "ExecStartPre=/bin/sh -c 'true'",
     });
 
-    expect(unit).toContain('ExecStartPre=/bin/sh -c \'true\'');
+    expect(unit).toContain("ExecStartPre=/bin/sh -c 'true'");
     expect(unit.indexOf('ExecStartPre=')).toBeLessThan(unit.indexOf('ExecStart='));
     expect(unit).toContain('ExecStart=/usr/bin/node /opt/piscord/dist/cli/index.js start');
     expect(unit).toContain('Environment=PIDG_CONFIG=/home/u/.config/pi-discord-gateway/config.env');

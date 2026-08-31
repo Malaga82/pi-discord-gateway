@@ -241,7 +241,10 @@ export async function invokeAgent(
     if (config.agentTimeoutMs > 0) {
       timeoutTimer = setTimeout(() => {
         timedOut = true;
-        logger.warn({ channelFolder, timeoutMs: config.agentTimeoutMs }, 'Agent invocation timed out');
+        logger.warn(
+          { channelFolder, timeoutMs: config.agentTimeoutMs },
+          'Agent invocation timed out',
+        );
         killProc();
       }, config.agentTimeoutMs);
       timeoutTimer.unref();

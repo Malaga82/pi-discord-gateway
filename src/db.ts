@@ -425,7 +425,7 @@ export function purgeOldMessages(retentionDays: number): { queue: number; log: n
     )
     .run(cutoff).changes;
   const log = db
-    .prepare('delete from message_log where timestamp < datetime(\'now\', ?)')
+    .prepare("delete from message_log where timestamp < datetime('now', ?)")
     .run(cutoff).changes;
 
   if (queue > 0 || log > 0) {

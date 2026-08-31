@@ -26,9 +26,7 @@ import {
   pushStreamEvent,
   startStreamMessage,
 } from '../discord/streaming.js';
-import {
-  computeEffectiveChannelSettings,
-} from './channel-settings.js';
+import { computeEffectiveChannelSettings } from './channel-settings.js';
 import { hasCachedModelCatalog, refreshModelCatalogAsync } from './model-catalog.js';
 
 /** Channels currently being processed (per-channel serial lock) */
@@ -276,7 +274,10 @@ async function processMessage(
       // don't delete history and don't spam a ⚠️ error message.
       markMessageFailed(rowid);
       if (stream) await finalizeStream(stream, undefined);
-      logger.warn({ jid, rowid, error: result.error }, 'pi killed (shutdown/restart); activity log preserved');
+      logger.warn(
+        { jid, rowid, error: result.error },
+        'pi killed (shutdown/restart); activity log preserved',
+      );
       return;
     }
 

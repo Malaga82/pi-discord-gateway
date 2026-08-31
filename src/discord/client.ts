@@ -399,8 +399,7 @@ export function splitMessage(text: string, max: number): string[] {
   const chunks: string[] = [];
   let remaining = text;
 
-  const isLowSurrogate = (i: number) =>
-    i > 1 && /^[\uDC00-\uDFFF]/.test(remaining[i] ?? '');
+  const isLowSurrogate = (i: number) => i > 1 && /^[\uDC00-\uDFFF]/.test(remaining[i] ?? '');
 
   while (remaining.length > max) {
     // Try to split at last newline within limit
@@ -453,9 +452,7 @@ export async function sendChunkWithRetry(
   } catch (err: any) {
     const status: unknown = err?.status;
     const transient =
-      status === undefined ||
-      status === 429 ||
-      (typeof status === 'number' && status >= 500);
+      status === undefined || status === 429 || (typeof status === 'number' && status >= 500);
     if (!transient) throw err;
     logger.warn({ err: err?.message, status }, 'Chunk send failed once, retrying after pause');
     await new Promise((resolve) => setTimeout(resolve, 1500));

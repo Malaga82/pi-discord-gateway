@@ -197,34 +197,34 @@ Config file location depends on your OS (see Data Locations). On Linux: `~/.conf
 
 Most users won't need to edit this file directly — `piscord setup` generates it for you. If you do want to tweak advanced settings, you can edit the file manually, or ask your pi to configure it for you. Run `piscord status` to see the config path on your system.
 
-| Variable                     | Default                         | Description                                                                |
-| ---------------------------- | ------------------------------- | -------------------------------------------------------------------------- |
-| `DISCORD_BOT_TOKEN`          | _(required)_                    | Discord bot token                                                          |
-| `PI_BIN`                     | `pi`                            | Path to pi binary                                                          |
-| `PI_MODEL`                   | _(none)_                        | Default model override                                                     |
-| `PI_THINKING`                | _(none)_                        | Default thinking level                                                     |
-| `PI_CWD`                     | `$HOME`                         | Default working directory for pi; can be overridden per registered channel |
-| `PI_EXTRA_FLAGS`             | _(none)_                        | Extra flags passed to pi                                                   |
-| `TRIGGER_NAME`               | `pi`                            | Bot trigger name for @mentions                                             |
-| `CHANNEL_POLICY`             | `open`                          | Channel access: `open`, `open-trigger`, or `allowlist`                     |
-| `EXCLUDED_CHANNELS`          | _(none)_                        | Comma-separated channel IDs to exclude from auto-registration              |
-| `MAX_CONCURRENCY`            | `3`                             | Max parallel pi invocations                                                |
-| `MAX_SCHEDULED_CONCURRENCY`  | `1`                             | Max scheduled tasks enqueued per tick                                      |
-| `POLL_INTERVAL_MS`           | `1000`                          | Queue poll interval (ms)                                                   |
-| `SHUTDOWN_TIMEOUT_MS`        | `15000`                         | Graceful shutdown timeout (ms)                                             |
-| `AUTO_REGISTER_DMS`          | `true`                          | Auto-register DM channels                                                  |
-| `ARCHIVE_RETENTION_DAYS`     | `30`                            | Days to keep archived sessions (0 = never clean)                           |
-| `MAX_ATTACHMENT_BYTES`       | `26214400`                      | Max size per attachment (0 = no limit)                                     |
-| `MAX_TOTAL_ATTACHMENT_BYTES` | `52428800`                      | Max combined attachment size (0 = no limit)                                |
-| `MEDIA_RETENTION_HOURS`      | `168`                           | Hours to keep downloaded attachment files for path-based agent access      |
-| `STREAMING`                  | `tools`                         | Live activity message: `off`, `tools` (activity log), `full` (log + streamed text) |
-| `STREAMING_UPDATE_MS`        | `2000`                          | Min interval between live message edits (ms)                               |
+| Variable                     | Default                         | Description                                                                                                                      |
+| ---------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `DISCORD_BOT_TOKEN`          | _(required)_                    | Discord bot token                                                                                                                |
+| `PI_BIN`                     | `pi`                            | Path to pi binary                                                                                                                |
+| `PI_MODEL`                   | _(none)_                        | Default model override                                                                                                           |
+| `PI_THINKING`                | _(none)_                        | Default thinking level                                                                                                           |
+| `PI_CWD`                     | `$HOME`                         | Default working directory for pi; can be overridden per registered channel                                                       |
+| `PI_EXTRA_FLAGS`             | _(none)_                        | Extra flags passed to pi                                                                                                         |
+| `TRIGGER_NAME`               | `pi`                            | Bot trigger name for @mentions                                                                                                   |
+| `CHANNEL_POLICY`             | `open`                          | Channel access: `open`, `open-trigger`, or `allowlist`                                                                           |
+| `EXCLUDED_CHANNELS`          | _(none)_                        | Comma-separated channel IDs to exclude from auto-registration                                                                    |
+| `MAX_CONCURRENCY`            | `3`                             | Max parallel pi invocations                                                                                                      |
+| `MAX_SCHEDULED_CONCURRENCY`  | `1`                             | Max scheduled tasks enqueued per tick                                                                                            |
+| `POLL_INTERVAL_MS`           | `1000`                          | Queue poll interval (ms)                                                                                                         |
+| `SHUTDOWN_TIMEOUT_MS`        | `15000`                         | Graceful shutdown timeout (ms)                                                                                                   |
+| `AUTO_REGISTER_DMS`          | `true`                          | Auto-register DM channels                                                                                                        |
+| `ARCHIVE_RETENTION_DAYS`     | `30`                            | Days to keep archived sessions (0 = never clean)                                                                                 |
+| `MAX_ATTACHMENT_BYTES`       | `26214400`                      | Max size per attachment (0 = no limit)                                                                                           |
+| `MAX_TOTAL_ATTACHMENT_BYTES` | `52428800`                      | Max combined attachment size (0 = no limit)                                                                                      |
+| `MEDIA_RETENTION_HOURS`      | `168`                           | Hours to keep downloaded attachment files for path-based agent access                                                            |
+| `STREAMING`                  | `tools`                         | Live activity message: `off`, `tools` (activity log), `full` (log + streamed text)                                               |
+| `STREAMING_UPDATE_MS`        | `2000`                          | Min interval between live message edits (ms)                                                                                     |
 | `ALLOW_BOT_PEERS`            | _(none)_                        | Comma-separated Discord user IDs of peer bots allowed to trigger the agent (must also @mention the bot). Empty = ignore all bots |
-| `BOT_LOOP_MAX`               | `10`                            | Bot-peer loop guard: max peer messages per (peer, channel) within the window before dropping (0 = no guard) |
-| `BOT_LOOP_WINDOW_MS`         | `300000`                        | Bot-peer loop guard sliding window (ms)                                    |
-| `SESSIONS_DIR`               | _(platform default)_/sessions   | Session storage directory (see Data Locations)                             |
-| `DB_PATH`                    | _(platform default)_/gateway.db | SQLite database path (see Data Locations)                                  |
-| `LOG_LEVEL`                  | `info`                          | Log level: debug/info/warn/error                                           |
+| `BOT_LOOP_MAX`               | `10`                            | Bot-peer loop guard: max peer messages per (peer, channel) within the window before dropping (0 = no guard)                      |
+| `BOT_LOOP_WINDOW_MS`         | `300000`                        | Bot-peer loop guard sliding window (ms)                                                                                          |
+| `SESSIONS_DIR`               | _(platform default)_/sessions   | Session storage directory (see Data Locations)                                                                                   |
+| `DB_PATH`                    | _(platform default)_/gateway.db | SQLite database path (see Data Locations)                                                                                        |
+| `LOG_LEVEL`                  | `info`                          | Log level: debug/info/warn/error                                                                                                 |
 
 After changing config, restart the service: `piscord daemon stop && piscord daemon start`
 

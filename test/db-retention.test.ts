@@ -34,49 +34,53 @@ describe('purgeOldMessages', () => {
       // Second connection to the same file: insert rows with controlled ages.
       const raw = new Database(process.env.DB_PATH!);
       try {
-      raw
-        .prepare(
-          "insert into message_queue (channel_jid, sender, sender_name, content, timestamp, status, processed_at) values ('dc:a','u','u','old-done',?,'done',?)",
-        )
-        .run(old, old);
-      raw
-        .prepare(
-          "insert into message_queue (channel_jid, sender, sender_name, content, timestamp, status, processed_at) values ('dc:a','u','u','old-failed',?,'failed',?)",
-        )
-        .run(old, old);
-      raw
-        .prepare(
-          "insert into message_queue (channel_jid, sender, sender_name, content, timestamp, status) values ('dc:a','u','u','pending-now',datetime('now'),'pending')",
-        )
-        .run();
-      raw
-        .prepare(
-          "insert into message_queue (channel_jid, sender, sender_name, content, timestamp, status, processed_at) values ('dc:a','u','u','recent-done',datetime('now'),'done',datetime('now'))",
-        )
-        .run();
-      raw
-        .prepare("insert into message_log (channel_jid, role, content, timestamp) values ('dc:a','user','old',?)")
-        .run(old);
-      raw
-        .prepare("insert into message_log (channel_jid, role, content) values ('dc:a','user','new')")
-        .run();
+        raw
+          .prepare(
+            "insert into message_queue (channel_jid, sender, sender_name, content, timestamp, status, processed_at) values ('dc:a','u','u','old-done',?,'done',?)",
+          )
+          .run(old, old);
+        raw
+          .prepare(
+            "insert into message_queue (channel_jid, sender, sender_name, content, timestamp, status, processed_at) values ('dc:a','u','u','old-failed',?,'failed',?)",
+          )
+          .run(old, old);
+        raw
+          .prepare(
+            "insert into message_queue (channel_jid, sender, sender_name, content, timestamp, status) values ('dc:a','u','u','pending-now',datetime('now'),'pending')",
+          )
+          .run();
+        raw
+          .prepare(
+            "insert into message_queue (channel_jid, sender, sender_name, content, timestamp, status, processed_at) values ('dc:a','u','u','recent-done',datetime('now'),'done',datetime('now'))",
+          )
+          .run();
+        raw
+          .prepare(
+            "insert into message_log (channel_jid, role, content, timestamp) values ('dc:a','user','old',?)",
+          )
+          .run(old);
+        raw
+          .prepare(
+            "insert into message_log (channel_jid, role, content) values ('dc:a','user','new')",
+          )
+          .run();
 
-      const purged = db.purgeOldMessages(30);
-      expect(purged.queue).toBe(2);
-      expect(purged.log).toBe(1);
+        const purged = db.purgeOldMessages(30);
+        expect(purged.queue).toBe(2);
+        expect(purged.log).toBe(1);
 
-      const remaining = raw
-        .prepare('select content from message_queue order by rowid')
-        .all() as Array<{ content: string }>;
-      expect(remaining.map((r) => r.content).sort()).toEqual(['pending-now', 'recent-done']);
+        const remaining = raw
+          .prepare('select content from message_queue order by rowid')
+          .all() as Array<{ content: string }>;
+        expect(remaining.map((r) => r.content).sort()).toEqual(['pending-now', 'recent-done']);
 
-      const logRows = raw.prepare('select content from message_log').all() as Array<{
-        content: string;
-      }>;
-      expect(logRows.map((r) => r.content)).toEqual(['new']);
+        const logRows = raw.prepare('select content from message_log').all() as Array<{
+          content: string;
+        }>;
+        expect(logRows.map((r) => r.content)).toEqual(['new']);
 
-      // Retention disabled: no-op.
-      expect(db.purgeOldMessages(0)).toEqual({ queue: 0, log: 0 });
+        // Retention disabled: no-op.
+        expect(db.purgeOldMessages(0)).toEqual({ queue: 0, log: 0 });
       } finally {
         raw.close();
       }

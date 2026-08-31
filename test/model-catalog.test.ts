@@ -198,7 +198,12 @@ describe('loadModelCatalog stale-while-revalidate', () => {
     const refreshedOutput =
       'provider  model  context  max-out  thinking  images\nother    gamma  128K     16K      yes       no\n';
     execFileMock.mockImplementation(
-      (_bin: string, _args: string[], _opts: unknown, cb: (err: unknown, stdout: string) => void) => {
+      (
+        _bin: string,
+        _args: string[],
+        _opts: unknown,
+        cb: (err: unknown, stdout: string) => void,
+      ) => {
         cb(null, refreshedOutput);
       },
     );
@@ -232,7 +237,12 @@ describe('loadModelCatalog first-load (hot path)', () => {
     mockPiCatalog();
     const cwd = '/tmp/first-load-check';
     execFileMock.mockImplementation(
-      (_bin: string, _args: string[], _opts: unknown, cb: (err: unknown, stdout: string) => void) => {
+      (
+        _bin: string,
+        _args: string[],
+        _opts: unknown,
+        cb: (err: unknown, stdout: string) => void,
+      ) => {
         cb(null, defaultCliOutput);
       },
     );
@@ -247,7 +257,11 @@ describe('loadModelCatalog first-load (hot path)', () => {
     expect(execFileMock).toHaveBeenCalled();
     expect(hasCachedModelCatalog(cwd)).toBe(true); // real catalog cached by the async refresh
     const filled = listAvailableModels({ allowStale: true, cwd });
-    expect(filled.map((model) => model.ref).sort()).toEqual(['other/gamma', 'test/alpha', 'test/beta']);
+    expect(filled.map((model) => model.ref).sort()).toEqual([
+      'other/gamma',
+      'test/alpha',
+      'test/beta',
+    ]);
   });
 
   it('bumps loadedAt on a failed refresh so retries back off to one per TTL', async () => {
@@ -256,7 +270,12 @@ describe('loadModelCatalog first-load (hot path)', () => {
     listAvailableModels({ forceRefresh: true, cwd });
 
     execFileMock.mockImplementation(
-      (_bin: string, _args: string[], _opts: unknown, cb: (err: Error | null, stdout: string) => void) => {
+      (
+        _bin: string,
+        _args: string[],
+        _opts: unknown,
+        cb: (err: Error | null, stdout: string) => void,
+      ) => {
         cb(new Error('pi broken'), '');
       },
     );

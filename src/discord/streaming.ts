@@ -163,10 +163,7 @@ function renderToolLine(toolCall: any): string {
         ? (args.command ?? args.path ?? args.query ?? args.url)
         : JSON.stringify(args);
   }
-  argPreview = String(argPreview)
-    .replace(/\s+/gu, ' ')
-    .replace(/`/gu, "'")
-    .trim();
+  argPreview = String(argPreview).replace(/\s+/gu, ' ').replace(/`/gu, "'").trim();
   const short = argPreview.length > ARG_MAX ? `${argPreview.slice(0, ARG_MAX)}…` : argPreview;
   return short ? `${meta.emoji} ${meta.verb} \`${short}\`` : `${meta.emoji} ${meta.verb}`;
 }

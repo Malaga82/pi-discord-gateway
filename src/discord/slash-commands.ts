@@ -100,7 +100,6 @@ export async function registerGlobalCommands(client: Client<true>): Promise<void
   logger.info('Registered global slash commands');
 }
 
-
 export async function handleAutocomplete(interaction: AutocompleteInteraction): Promise<void> {
   if (interaction.commandName !== 'pi') return;
   if (interaction.options.getSubcommand() !== 'model') return;

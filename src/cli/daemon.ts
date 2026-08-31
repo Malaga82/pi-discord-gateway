@@ -121,8 +121,10 @@ export function buildPeerSymlinkExecStartPre(
   let globalRoot = options.globalRoot;
   if (globalRoot === undefined) {
     try {
-      globalRoot = execSync('npm root -g', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-        .trim();
+      globalRoot = execSync('npm root -g', {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim();
     } catch {
       return undefined;
     }

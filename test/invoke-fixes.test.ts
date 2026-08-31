@@ -14,7 +14,10 @@ describe('createJsonLineReader (UTF-8 across chunk boundaries)', () => {
   it('reassembles multibyte sequences split across chunks without U+FFFD', () => {
     const evt = JSON.stringify({
       type: 'message_end',
-      message: { role: 'assistant', content: [{ type: 'text', text: 'risposta con àèìòù e emoji 🎉 dentro' }] },
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'risposta con àèìòù e emoji 🎉 dentro' }],
+      },
     });
     const raw = Buffer.from(`${evt}\n`, 'utf8');
     const cut = raw.indexOf(Buffer.from('à')) + 1; // middle of the 0xC3 0xA0 pair
