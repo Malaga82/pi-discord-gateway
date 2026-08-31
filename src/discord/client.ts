@@ -255,15 +255,13 @@ async function handleMessage(message: Message): Promise<void> {
   }
 
   // ── Reply context ──
-  // Fetched only when it can change the outcome (trigger bypass for a reply
-  // to the bot) or when the message is heading to the agent anyway (context
-  // tag). Unregistered channels and non-triggered messages skip the REST call.
+  // Fetched for every reply that reaches this point (channel registered and
+  // policy-passing): either the trigger bypass needs it, or the message is
+  // heading to the agent anyway and gets the [Reply to X] context tag.
+  // Unregistered/non-triggered messages never get here — zero wasted REST.
   let isReplyToBot = false;
   let replyPrefix = '';
-  if (
-    (channel.requiresTrigger && !hasTrigger && message.reference?.messageId) ||
-    (!channel.requiresTrigger && message.reference?.messageId)
-  ) {
+  if (message.reference?.messageId) {
     try {
       const ref = await message.channel.messages.fetch(message.reference.messageId);
       isReplyToBot = ref.author?.id === botId;
