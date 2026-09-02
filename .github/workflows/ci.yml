@@ -8,11 +8,19 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
 
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         node-version: [20, 22]
+        include:
+          # Windows parity watchdog: the code has win32-specific branches (.cmd
+          # shim resolution, kill semantics, SIGBREAK, APPDATA paths) but the
+          # suite still has Windows-only failures. Non-blocking until green.
+          - os: windows-latest
+            node-version: 22
 
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +45,7 @@ jobs:
 
       - name: Test
         run: npm test
+        continue-on-error: ${{ matrix.os == 'windows-latest' }}
 
       - name: CLI smoke test
         run: node dist/cli/index.js help
