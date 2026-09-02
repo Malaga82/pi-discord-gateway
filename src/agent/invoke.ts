@@ -550,6 +550,9 @@ async function getSessionStatsViaRpc(
       });
     };
 
+    // 6s: pi's extension startup (UI events on stdout before the response)
+    // can take ~3s on loaded machines — 2.5s made /pi status always fall back
+    // to the JSONL path, which has no context-usage data.
     const timeout = setTimeout(() => {
       if (process.platform === 'win32') {
         proc.kill();
@@ -558,7 +561,7 @@ async function getSessionStatsViaRpc(
         escalationTimer = setTimeout(() => proc.kill('SIGKILL'), 1000);
       }
       finish(new Error('Timed out waiting for pi session stats'));
-    }, 2500);
+    }, 6000);
 
     const reader = createJsonLineReader((line) => {
       try {
