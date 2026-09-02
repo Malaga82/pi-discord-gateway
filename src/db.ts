@@ -8,6 +8,20 @@ import { type RegisteredChannel, type QueuedMessage, type ThinkingLevel } from '
 let db!: Database.Database;
 let dbOpen = false;
 
+// better-sqlite3 does not cache prepared statements: channelsWithPending()
+// recompiles every poll tick (1s) otherwise. Keyed by SQL text — all calls
+// go through initDb() first, so statements are always valid.
+type Stmt = Database.Statement<unknown[], unknown>;
+const prepared = new Map<string, Stmt>();
+function prep(sql: string): Stmt {
+  let stmt = prepared.get(sql);
+  if (!stmt) {
+    stmt = db.prepare(sql);
+    prepared.set(sql, stmt);
+  }
+  return stmt;
+}
+
 export type ScheduledTaskType = 'once' | 'recurring';
 
 export interface ScheduledTaskRow {
@@ -30,6 +44,7 @@ export function initDb(): void {
   mkdirSync(dirname(config.dbPath), { recursive: true });
   db = new Database(config.dbPath);
   dbOpen = true;
+  prepared.clear(); // statements are bound to the previous connection
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
 
@@ -94,7 +109,7 @@ export function initDb(): void {
 }
 
 function ensureTableColumn(table: string, column: string, ddl: string): void {
-  const rows = db.prepare(`pragma table_info(${table})`).all() as Array<{ name: string }>;
+  const rows = prep(`pragma table_info(${table})`).all() as Array<{ name: string }>;
   if (rows.some((row) => row.name === column)) return;
   db.exec(`alter table ${table} add column ${column} ${ddl}`);
   logger.info({ table, column }, 'Database migrated: added column');
@@ -116,7 +131,7 @@ function normalizeTimestamp(timestamp: string | null): string | null {
 // ── Channel registration ──
 
 export function registerChannel(ch: RegisteredChannel): void {
-  db.prepare(
+  prep(
     `
     insert into channels (jid, name, folder, requires_trigger, is_main, model_override, thinking_override, cwd_override)
     values (?, ?, ?, ?, ?, ?, ?, ?)
@@ -144,17 +159,17 @@ export function registerChannel(ch: RegisteredChannel): void {
 }
 
 export function unregisterChannel(jid: string): boolean {
-  const result = db.prepare('delete from channels where jid = ?').run(jid);
+  const result = prep('delete from channels where jid = ?').run(jid);
   return result.changes > 0;
 }
 
 export function getChannel(jid: string): RegisteredChannel | undefined {
-  const row = db.prepare('select * from channels where jid = ?').get(jid) as any;
+  const row = prep('select * from channels where jid = ?').get(jid) as any;
   return row ? rowToChannel(row) : undefined;
 }
 
 export function getAllChannels(): RegisteredChannel[] {
-  const rows = db.prepare('select * from channels order by created_at').all() as any[];
+  const rows = prep('select * from channels order by created_at').all() as any[];
   return rows.map(rowToChannel);
 }
 
@@ -183,7 +198,7 @@ export function setChannelModelOverride(jid: string, modelOverride: string): boo
 }
 
 export function clearChannelModelOverride(jid: string): boolean {
-  const result = db.prepare("update channels set model_override = '' where jid = ?").run(jid);
+  const result = prep("update channels set model_override = '' where jid = ?").run(jid);
   return result.changes > 0;
 }
 
@@ -195,7 +210,7 @@ export function setChannelThinkingOverride(jid: string, thinkingOverride: Thinki
 }
 
 export function clearChannelThinkingOverride(jid: string): boolean {
-  const result = db.prepare("update channels set thinking_override = '' where jid = ?").run(jid);
+  const result = prep("update channels set thinking_override = '' where jid = ?").run(jid);
   return result.changes > 0;
 }
 
@@ -222,7 +237,7 @@ export function enqueueMessage(msg: {
   timestamp: string;
   attachments?: string | null;
 }): void {
-  db.prepare(
+  prep(
     `
     insert into message_queue (channel_jid, sender, sender_name, content, timestamp, attachments)
     values (?, ?, ?, ?, ?, ?)
@@ -261,13 +276,13 @@ export function claimNextMessage(channelJid: string): QueuedMessage | undefined 
 }
 
 export function markMessageDone(rowid: number): void {
-  db.prepare(
+  prep(
     "update message_queue set status = 'done', processed_at = datetime('now') where rowid = ?",
   ).run(rowid);
 }
 
 export function markMessageFailed(rowid: number): void {
-  db.prepare(
+  prep(
     "update message_queue set status = 'failed', processed_at = datetime('now') where rowid = ?",
   ).run(rowid);
 }
@@ -334,17 +349,17 @@ export function addScheduledTask(task: {
 }
 
 export function removeScheduledTask(id: number): boolean {
-  const result = db.prepare('delete from scheduled_tasks where id = ?').run(id);
+  const result = prep('delete from scheduled_tasks where id = ?').run(id);
   return result.changes > 0;
 }
 
 export function enableScheduledTask(id: number): boolean {
-  const result = db.prepare('update scheduled_tasks set enabled = 1 where id = ?').run(id);
+  const result = prep('update scheduled_tasks set enabled = 1 where id = ?').run(id);
   return result.changes > 0;
 }
 
 export function disableScheduledTask(id: number): boolean {
-  const result = db.prepare('update scheduled_tasks set enabled = 0 where id = ?').run(id);
+  const result = prep('update scheduled_tasks set enabled = 0 where id = ?').run(id);
   return result.changes > 0;
 }
 
@@ -376,7 +391,7 @@ export function getDueScheduledTasks(): ScheduledTaskRow[] {
 }
 
 export function updateTaskAfterRun(id: number, lastRunAt: string, nextRunAt: string | null): void {
-  db.prepare(
+  prep(
     `
     update scheduled_tasks
     set last_run_at = ?,
@@ -437,7 +452,7 @@ export function purgeOldMessages(retentionDays: number): { queue: number; log: n
 // ── Message log ──
 
 export function logMessage(channelJid: string, role: string, content: string): void {
-  db.prepare('insert into message_log (channel_jid, role, content) values (?, ?, ?)').run(
+  prep('insert into message_log (channel_jid, role, content) values (?, ?, ?)').run(
     channelJid,
     role,
     content,
@@ -447,5 +462,6 @@ export function logMessage(channelJid: string, role: string, content: string): v
 export function closeDb(): void {
   if (!dbOpen) return;
   db.close();
+  prepared.clear();
   dbOpen = false;
 }

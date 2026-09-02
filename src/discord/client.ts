@@ -342,8 +342,21 @@ export async function sendResponse(jid: string, text: string): Promise<boolean> 
     } else {
       // Split at line boundaries when possible
       const chunks = splitMessage(text, DISCORD_MAX_LENGTH);
-      for (const chunk of chunks) {
-        await sendChunkWithRetry(textChannel, chunk);
+      let sent = 0;
+      try {
+        for (const chunk of chunks) {
+          await sendChunkWithRetry(textChannel, chunk);
+          sent += 1;
+        }
+      } catch (err: any) {
+        if (sent > 0) {
+          // The user already received part of the answer — tell them it was
+          // truncated instead of silently marking the message failed.
+          await textChannel
+            .send(`⚠️ Consegna interrotta: risposta troncata (${sent}/${chunks.length} parti).`)
+            .catch(() => undefined);
+        }
+        throw err;
       }
     }
     logger.info({ jid, length: text.length }, 'Response sent');
@@ -397,14 +410,19 @@ export function splitMessage(text: string, max: number): string[] {
   const chunks: string[] = [];
   let remaining = text;
 
-  const isLowSurrogate = (i: number) => i > 1 && /^[\uDC00-\uDFFF]/.test(remaining[i] ?? '');
+  const isLowSurrogate = (i: number) => /^[\uDC00-\uDFFF]/.test(remaining[i] ?? '');
 
   while (remaining.length > max) {
     // Try to split at last newline within limit
     let splitAt = remaining.lastIndexOf('\n', max);
     if (splitAt <= 0) splitAt = max; // hard split if no newline
     // Never cut a UTF-16 surrogate pair in half (would corrupt emoji).
-    if (isLowSurrogate(splitAt)) splitAt -= 1;
+    // splitAt pointing AT a low surrogate = cut between the pair's halves.
+    // splitAt===1 with a pair at [0,1] can't step back to 0 (empty chunk,
+    // infinite loop) — include the whole pair in the chunk instead.
+    if (isLowSurrogate(splitAt)) {
+      splitAt = splitAt > 1 ? splitAt - 1 : Math.min(2, remaining.length);
+    }
 
     let chunk = remaining.slice(0, splitAt);
     let rest = remaining.slice(splitAt).replace(/^\n/, '');
@@ -420,7 +438,9 @@ export function splitMessage(text: string, max: number): string[] {
       const minSplit = openFence.length + 2;
       if (chunk.length > max - 4 || splitAt < minSplit) {
         splitAt = max - 4;
-        if (isLowSurrogate(splitAt)) splitAt -= 1;
+        if (isLowSurrogate(splitAt)) {
+          splitAt = splitAt > 1 ? splitAt - 1 : Math.min(2, remaining.length);
+        }
         chunk = remaining.slice(0, splitAt);
         rest = remaining.slice(splitAt);
         fenceLines = chunk.match(/^```.*$/gm) ?? [];

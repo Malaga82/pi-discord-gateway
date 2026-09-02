@@ -102,14 +102,19 @@ export function startArchiveCleanup(): () => void {
     return () => {};
   }
 
-  const timer = setInterval(() => {
+  const runOnce = () => {
     try {
       cleanupArchivedSessions(config.sessionsDir, config.archiveRetentionDays);
       purgeOldMessages(config.archiveRetentionDays);
     } catch (err: any) {
       logger.warn({ err: err.message }, 'Archive cleanup error');
     }
-  }, CLEANUP_INTERVAL_MS);
+  };
+
+  // Run immediately: a gateway restarted daily would otherwise never reach
+  // the 24h interval and queue/log rows would grow forever.
+  runOnce();
+  const timer = setInterval(runOnce, CLEANUP_INTERVAL_MS);
 
   return () => clearInterval(timer);
 }

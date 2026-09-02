@@ -424,9 +424,12 @@ export function parsePiModelList(output: string): AvailableModelInfo[] | undefin
   if (!header) return undefined;
   return lines.slice(header.rowsStart).flatMap((line) => {
     const columns = line.split(/\s+/);
+    // Separator rows (────) and truncated rows are not models.
+    if (columns.length < header.thinkingIndex + 1) return [];
     const provider = columns[header.providerIndex];
     const id = columns[header.modelIndex];
     if (!provider || !id) return [];
+    if (!/[a-z0-9]/i.test(provider) || !/[a-z0-9]/i.test(id)) return [];
     const reasoning = columns[header.thinkingIndex]?.toLowerCase() === 'yes';
     return [
       {

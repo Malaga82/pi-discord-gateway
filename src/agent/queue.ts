@@ -37,6 +37,7 @@ const activeChannelControllers = new Map<string, AbortController>();
 
 let running = false;
 let pollTimer: NodeJS.Timeout | undefined;
+let pollTimerFiresAt = 0;
 let stopPromise: Promise<void> | null = null;
 
 export function isChannelProcessing(jid: string): boolean {
@@ -81,8 +82,17 @@ export function stopProcessingLoop(opts: { timeoutMs?: number } = {}): Promise<v
 }
 
 function schedulePoll(delayMs = config.pollInterval): void {
-  if (!running || pollTimer) return;
+  if (!running) return;
 
+  // A sooner explicit request (e.g. schedulePoll(0) after a task finished)
+  // preempts the pending timer instead of waiting a full interval.
+  const firesAt = Date.now() + delayMs;
+  if (pollTimer) {
+    if (firesAt >= pollTimerFiresAt) return;
+    clearTimeout(pollTimer);
+  }
+
+  pollTimerFiresAt = firesAt;
   pollTimer = setTimeout(() => {
     pollTimer = undefined;
     poll();

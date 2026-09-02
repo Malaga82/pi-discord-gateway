@@ -7,8 +7,10 @@ const originalCwd = process.cwd();
 const originalEnv = { ...process.env };
 const tempDirs: string[] = [];
 const CONFIG_ENV_KEYS = [
+  'APPDATA',
   'AUTO_REGISTER_DMS',
   'DB_PATH',
+  'LOCALAPPDATA',
   'DISCORD_BOT_TOKEN',
   'HOME',
   'LOG_LEVEL',
@@ -98,6 +100,7 @@ describe('config loading', () => {
 
   it('uses the default config file before the cwd .env fallback', async () => {
     const homeDir = createTempDir();
+    isolateWindowsProfile(homeDir);
     const workDir = createTempDir();
     const defaultConfigPath = expectedDefaultConfigPath(homeDir);
 
@@ -125,6 +128,7 @@ describe('config loading', () => {
 
   it('uses the piscord platform data directory defaults when storage paths are unset', async () => {
     const homeDir = createTempDir();
+    isolateWindowsProfile(homeDir);
     const workDir = createTempDir();
 
     process.chdir(workDir);
@@ -140,6 +144,20 @@ describe('config loading', () => {
     expect(config.sessionsDir).toBe(resolve(dataDir, 'sessions'));
   });
 });
+
+/**
+ * On win32 the platform default config/data paths come from %APPDATA% and
+ * %LOCALAPPDATA% — the REAL user profile, not the temp home. Redirect them
+ * into the temp home so `npm test` can never truncate a real config.env
+ * (which contains the bot token) and tests cannot contaminate each other
+ * through the user profile.
+ */
+function isolateWindowsProfile(homeDir: string): void {
+  if (process.platform === 'win32') {
+    process.env.APPDATA = join(homeDir, 'AppData', 'Roaming');
+    process.env.LOCALAPPDATA = join(homeDir, 'AppData', 'Local');
+  }
+}
 
 function createTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'pidg-config-'));
@@ -189,3 +207,27 @@ async function loadConfigModule() {
   vi.resetModules();
   return import('../src/config.js');
 }
+
+describe('STREAMING parsing', () => {
+  it("accepts 'tools' without a spurious unknown-value warning", async () => {
+    process.env.STREAMING = 'tools';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    vi.resetModules();
+    const { config } = await import('../src/config.js');
+
+    expect(config.streaming).toBe('tools');
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('warns on unknown values but still falls back to tools', async () => {
+    process.env.STREAMING = 'toolsss';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    vi.resetModules();
+    const { config } = await import('../src/config.js');
+
+    expect(config.streaming).toBe('tools');
+    expect(warnSpy).toHaveBeenCalledOnce();
+  });
+});

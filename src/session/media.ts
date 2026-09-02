@@ -81,6 +81,8 @@ export async function downloadAttachments(
 /** Make filenames safe for the filesystem */
 function sanitizeFilename(name: string): string {
   const sanitized = name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200);
+  // '.' and '..' survive the regex and would escape the media dir on join.
+  if (sanitized === '.' || sanitized === '..') return 'file';
   return sanitized || 'file';
 }
 
@@ -154,7 +156,11 @@ function cleanupExpiredMedia(): void {
   const ttlMs = mediaTtlMs();
   let cleaned = 0;
 
-  for (const mediaRoot of findMediaRoots(config.sessionsDir)) {
+  // Depth bound: channel/media is depth 2, archived-channel/media is depth 3.
+  // ponytail: the unbounded walk of the whole sessionsDir was linear in the
+  // entire history; if channel layouts ever get deeper, iterate the
+  // registered channel folders from the DB instead.
+  for (const mediaRoot of findMediaRoots(config.sessionsDir, 3)) {
     try {
       const msgDirs = readdirSync(mediaRoot, { withFileTypes: true });
       for (const msgDir of msgDirs) {
@@ -181,7 +187,8 @@ function cleanupExpiredMedia(): void {
   }
 }
 
-function findMediaRoots(dirPath: string): string[] {
+function findMediaRoots(dirPath: string, maxDepth = 3): string[] {
+  if (maxDepth <= 0) return [];
   let entries: Dirent[];
 
   try {
@@ -201,7 +208,7 @@ function findMediaRoots(dirPath: string): string[] {
       continue;
     }
 
-    mediaRoots.push(...findMediaRoots(entryPath));
+    mediaRoots.push(...findMediaRoots(entryPath, maxDepth - 1));
   }
 
   return mediaRoots;

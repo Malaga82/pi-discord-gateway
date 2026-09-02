@@ -1,5 +1,6 @@
 import {
   MessageFlags,
+  PermissionFlagsBits,
   SlashCommandBuilder,
   type AutocompleteInteraction,
   type ChatInputCommandInteraction,
@@ -40,13 +41,17 @@ import {
   getDesiredThinkingLevel,
   type EffectiveChannelSettings,
 } from '../agent/channel-settings.js';
-import { abortChannelTask, isChannelProcessing } from '../agent/queue.js';
+import { abortChannelTask } from '../agent/queue.js';
 import { rotateChannelSessionDir } from '../session/path.js';
 import type { RegisteredChannel } from '../types.js';
 
 const PI_COMMAND = new SlashCommandBuilder()
   .setName('pi')
   .setDescription('Inspect or change pi model settings for this channel')
+  // /pi new|stop|model mutate the channel's agent session/settings and /pi
+  // status reveals host paths — keep them to moderators by default (server
+  // admins can still override per-channel; DMs are unaffected).
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
   .addSubcommand((sub) =>
     sub
       .setName('status')
@@ -189,16 +194,6 @@ async function handleNew(interaction: ChatInputCommandInteraction): Promise<void
   const channel = ensureManagedChannel(interaction);
   if (!channel) {
     await interaction.reply(reply(notRegisteredMessage(), interaction));
-    return;
-  }
-
-  if (isChannelProcessing(channel.jid)) {
-    await interaction.reply(
-      reply(
-        'This channel is currently processing a message. Wait for it to finish, then run /new again.',
-        interaction,
-      ),
-    );
     return;
   }
 

@@ -36,6 +36,11 @@ describe('splitMessage', () => {
     expect(splitMessage('hello 😀', 2000)).toEqual(['hello 😀']);
   });
 
+  it('never splits a surrogate pair even at degenerate max sizes', () => {
+    // Pair at index [0,1], split candidate at 1 would orphan the high half.
+    expect(splitMessage('😀b', 1)).toEqual(['😀', 'b']);
+  });
+
   it('closes and reopens ``` fences cut by a hard split, within the length budget, preserving the language tag', () => {
     const text = '```js\n' + 'x'.repeat(6000) + '\n```\n';
     const chunks = splitMessage(text, 2000);

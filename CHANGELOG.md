@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.4] - 2026-08-31
+
+### Security
+
+- `/pi` slash commands now default to `ManageMessages` permission (server admins can override per-channel; DMs unaffected) — `/pi new`, `/pi stop`, `/pi model` are no longer runnable by any member, and `/pi status` no longer leaks host paths to everyone.
+- `piscord setup` writes the config file with `0600` permissions — it contains `DISCORD_BOT_TOKEN` (existing files: run `chmod 600` manually).
+- `pi-spawn`: `where ${piBin}` shell interpolation replaced with `execFileSync('where', [piBin])` (Windows).
+- `sanitizeFilename` rejects `.` and `..` so a crafted attachment name cannot escape the media directory on join.
+
+### Fixed
+
+- `--mode json` is pushed **before** the prompt: the debug log trims the last arg to hide the prompt, and the previous order hid only `'json'` — the user prompt was logged in clear at `LOG_LEVEL=debug` whenever streaming was on.
+- `STREAMING=tools` (the documented default) no longer triggers the unknown-value warning.
+- `purgeOldMessages`/archive cleanup now run once at startup, not only every 24h — a gateway restarted daily would never purge `message_queue`/`message_log`.
+- `readSessionTokensFromJsonl` survives the session file vanishing between listing and reading (returns zeros instead of failing `/pi status`).
+- `readLatestAgentErrorFromSession` reads only the last 64KB of the session file instead of the whole (potentially tens of MB) file on every failed invocation.
+- UTF-16 surrogate-pair guard in `splitMessage` handles the `splitAt === 1` case (pair at the very start) without empty chunks or corrupted emoji.
+- `/pi new` race: the queue is cleared **before** the processing re-check, closing the window where pi could claim a message and write into the just-archived session directory.
+- `/pi` model-table parser skips separator rows (`────`) and truncated rows instead of creating ghost models like `────/────`.
+- Multi-chunk responses that fail mid-send now notify the user the answer was truncated (with delivered/total parts) instead of silently marking the message failed.
+
+### Performance
+
+- `schedulePoll(0)` preempts a pending long timer instead of being ignored — the next queued message starts within the same tick after a task completes.
+- `better-sqlite3` statements are cached per SQL text (`channelsWithPending` recompiled every 1s poll otherwise).
+- Media cleanup walk is depth-bounded (3) instead of recursing the entire `sessionsDir` tree.
+
+### Changed
+
+- `MAX_SCHEDULED_CONCURRENCY` default raised 1 → 5: it only throttles enqueueing (execution is already serialized by `MAX_CONCURRENCY`), and the old default delayed a burst of due tasks by 30s each.
+- CI matrix gains a non-blocking `windows-latest` job: the codebase has explicit win32 branches but 8 tests fail there today; failures are now visible without blocking merges.
+
 ## [1.8.3] - 2026-08-31
 
 ### Fixed — regressions introduced in 1.8.2

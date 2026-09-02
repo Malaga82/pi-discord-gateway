@@ -340,6 +340,17 @@ describe('parsePiModelList', () => {
     expect(parsePiModelList('no models available\n')).toBeUndefined();
   });
 
+  it('filters separator and truncated rows instead of creating ghost models', () => {
+    const output = [
+      'provider  model  context  max-out  thinking  images',
+      '────────  ────────  ────  ────  ────  ────',
+      'test     alpha  128K     16K      yes       no',
+      'only-one-column',
+    ].join('\n');
+
+    expect(parsePiModelList(output)).toEqual([expect.objectContaining({ ref: 'test/alpha' })]);
+  });
+
   it('returns an empty (authoritative) catalog for a valid header with zero rows', () => {
     expect(parsePiModelList('provider  model  context  max-out  thinking  images\n')).toEqual([]);
   });

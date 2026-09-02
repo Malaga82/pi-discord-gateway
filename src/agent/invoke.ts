@@ -1,5 +1,13 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  closeSync,
+  fstatSync,
+  readSync,
+} from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import { type AttachmentMeta } from '../discord/attachments.js';
 import { config } from '../config.js';
@@ -144,15 +152,17 @@ export async function invokeAgent(
     };
   }
 
-  // Prompt (must be last)
-  const prompt = attachmentPrompt ? `${userText}\n\n${attachmentPrompt}` : userText;
-  args.push('-p', prompt);
-
   // Streaming: when a consumer wants live events, ask pi for JSONL event output.
+  // Must be pushed BEFORE the prompt: the debug log trims the last arg to hide
+  // the user prompt, so the prompt has to stay last.
   const onEvent = opts?.onEvent;
   if (onEvent) {
     args.push('--mode', 'json');
   }
+
+  // Prompt (must be last)
+  const prompt = attachmentPrompt ? `${userText}\n\n${attachmentPrompt}` : userText;
+  args.push('-p', prompt);
 
   const { bin: effectiveBin, args: effectiveArgs } = resolvePiSpawn(config.piBin, args);
 
@@ -368,7 +378,10 @@ function readLatestAgentErrorFromSession(channelFolder: string): string | undefi
 
   let lines: string[];
   try {
-    lines = readFileSync(sessionFile, 'utf-8').split(/\r?\n/u);
+    // Only the tail matters: the newest assistant entry sits at the end of
+    // the session file, which can be tens of MB — reading it all blocks the
+    // event loop on every failed invocation.
+    lines = readTailLines(sessionFile, 64 * 1024);
   } catch {
     return undefined;
   }
@@ -580,9 +593,33 @@ async function getSessionStatsViaRpc(
   });
 }
 
+/** Read the last maxBytes of a file as lines (first line may be partial). */
+function readTailLines(sessionFile: string, maxBytes: number): string[] {
+  let fd: number | undefined;
+  try {
+    fd = openSync(sessionFile, 'r');
+    const size = fstatSync(fd).size;
+    const start = Math.max(0, size - maxBytes);
+    const buffer = Buffer.alloc(size - start);
+    readSync(fd, buffer, 0, buffer.length, start);
+    const lines = buffer.toString('utf-8').split(/\r?\n/u);
+    if (start > 0) lines.shift(); // drop the possibly partial first line
+    return lines;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 function readSessionTokensFromJsonl(sessionFile: string): SessionTokenUsage {
   const totals: SessionTokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
-  const lines = readFileSync(sessionFile, 'utf-8').split(/\r?\n/u);
+  // Cold path (/pi status only): whole-file read is acceptable, token totals
+  // need every line anyway. ponytail: stream if sessions grow huge.
+  let lines: string[];
+  try {
+    lines = readFileSync(sessionFile, 'utf-8').split(/\r?\n/u);
+  } catch {
+    return totals; // file vanished between listing and reading — report zeros
+  }
 
   for (const line of lines) {
     const trimmed = line.trim();

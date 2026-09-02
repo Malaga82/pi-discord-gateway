@@ -138,12 +138,11 @@ function parseStreamingMode(value: string | undefined): StreamingMode {
   const v = (value || '').trim().toLowerCase();
   if (v === 'off' || v === 'false' || v === '0' || v === 'no') return 'off';
   if (['true', '1', 'yes', 'on', 'full'].includes(v)) return 'full';
-  if (v) {
-    // Unknown value: fall back to the default but say so — a silent typo here
-    // would flip streaming behavior without any hint.
-    console.warn(`[piscord] Unknown STREAMING value "${value}" — falling back to "tools"`);
-  }
-  return 'tools'; // default (also for unknown values)
+  if (v === 'tools' || v === '') return 'tools';
+  // Unknown value: fall back to the default but say so — a silent typo here
+  // would flip streaming behavior without any hint.
+  console.warn(`[piscord] Unknown STREAMING value "${value}" — falling back to "tools"`);
+  return 'tools';
 }
 
 export const config = {
@@ -177,8 +176,11 @@ export const config = {
   /** Max concurrent agent invocations */
   maxConcurrency: envInt('MAX_CONCURRENCY', 3, { min: 1 }),
 
-  /** Max scheduled tasks enqueued per scheduler tick */
-  maxScheduledConcurrency: envInt('MAX_SCHEDULED_CONCURRENCY', 1, { min: 1 }),
+  /** How many due scheduled tasks may be enqueued per 30s scheduler tick.
+   * Execution is already serialized by maxConcurrency — this only throttles
+   * enqueueing, so a burst of tasks due at the same hour drains in one tick
+   * instead of one per tick. */
+  maxScheduledConcurrency: envInt('MAX_SCHEDULED_CONCURRENCY', 5, { min: 1 }),
 
   /** Poll interval for message queue (ms) */
   pollInterval: envInt('POLL_INTERVAL_MS', 1000, { min: 1 }),

@@ -146,6 +146,7 @@ export async function runSetup(args: string[]): Promise<void> {
       sessionsDir: DEFAULT_SESSIONS_DIR,
       dbPath: DEFAULT_DB_PATH,
     }),
+    { mode: 0o600 }, // the file contains DISCORD_BOT_TOKEN
   );
 
   clack.log.success(`Config written to: ${configPath}`);
@@ -247,7 +248,7 @@ export function buildConfigFile(options: {
     '# Gateway behavior',
     `TRIGGER_NAME=${options.triggerName}`,
     'MAX_CONCURRENCY=3',
-    'MAX_SCHEDULED_CONCURRENCY=1',
+    'MAX_SCHEDULED_CONCURRENCY=5',
     'POLL_INTERVAL_MS=1000',
     'SHUTDOWN_TIMEOUT_MS=15000',
     'AUTO_REGISTER_DMS=true',

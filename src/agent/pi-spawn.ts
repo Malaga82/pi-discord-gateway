@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve as pathResolve } from 'node:path';
 
@@ -36,7 +36,9 @@ export function resolvePiSpawn(piBin: string, args: string[]): { bin: string; ar
 
 function resolveWindowsShim(piBin: string): { bin: string; scriptArg: string | undefined } {
   try {
-    const shimPath = execSync(`where ${piBin}`, {
+    // execFileSync (no shell): `where ${piBin}` would interpolate PI_BIN into
+    // a shell command — operator-controlled, but free to harden.
+    const shimPath = execFileSync('where', [piBin], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     })

@@ -1,6 +1,6 @@
 {
   "name": "piscord",
-  "version": "1.8.3",
+  "version": "1.8.4",
   "description": "Lightweight Discord gateway for pi coding agent",
   "license": "MIT",
   "repository": {
