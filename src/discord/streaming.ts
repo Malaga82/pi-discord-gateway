@@ -256,7 +256,10 @@ export async function startStreamMessage(jid: string): Promise<StreamHandle> {
   try {
     const channel = await fetchChannel(jid);
     if (channel) {
-      handle.message = await channel.send({ content: '⏳ Working…' });
+      handle.message = await channel.send({
+        content: '⏳ Working…',
+        allowedMentions: { parse: [] },
+      });
     }
   } catch (err: any) {
     logger.warn(
@@ -310,7 +313,10 @@ async function flushNow(handle: StreamHandle): Promise<void> {
         handle.needsFlush = false;
         const content = renderCommentary(handle.state);
         if (content !== handle.lastContent) {
-          await handle.message!.edit({ content: content.slice(0, COMMENTARY_MAX) });
+          await handle.message!.edit({
+            content: content.slice(0, COMMENTARY_MAX),
+            allowedMentions: { parse: [] },
+          });
           handle.lastContent = content;
           handle.lastEdit = Date.now();
         }
@@ -403,7 +409,10 @@ export async function finalizeStream(handle: StreamHandle, finalText?: string): 
     return;
   }
   try {
-    await handle.message.edit({ content: log.slice(0, COMMENTARY_MAX) });
+    await handle.message.edit({
+      content: log.slice(0, COMMENTARY_MAX),
+      allowedMentions: { parse: [] },
+    });
   } catch (err: any) {
     logger.warn({ jid: handle.jid, err: err?.message }, 'Final streaming edit failed');
     await deletePlaceholder(handle);

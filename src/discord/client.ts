@@ -460,13 +460,14 @@ export function splitMessage(text: string, max: number): string[] {
 
 /** Send one chunk, retrying transient failures (429 / 5xx / network) once
  * after a short pause. Non-transient errors (400/403/…) fail fast: a retry
- * would just burn 1.5s and fail identically. */
+ * would just burn 1.5s and fail identically. allowedMentions parse:[] keeps
+ * model-generated <@id>/<@&role>/@everyone from pinging anyone. */
 export async function sendChunkWithRetry(
   textChannel: TextChannel | DMChannel,
   chunk: string,
 ): Promise<void> {
   try {
-    await textChannel.send(chunk);
+    await textChannel.send({ content: chunk, allowedMentions: { parse: [] } });
   } catch (err: any) {
     const status: unknown = err?.status;
     const transient =
@@ -474,7 +475,7 @@ export async function sendChunkWithRetry(
     if (!transient) throw err;
     logger.warn({ err: err?.message, status }, 'Chunk send failed once, retrying after pause');
     await new Promise((resolve) => setTimeout(resolve, 1500));
-    await textChannel.send(chunk);
+    await textChannel.send({ content: chunk, allowedMentions: { parse: [] } });
   }
 }
 

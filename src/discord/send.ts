@@ -75,6 +75,7 @@ export async function sendFilesToDiscord(request: SendRequest): Promise<{ sentFi
 
     await channel.send({
       content: request.text || undefined,
+      allowedMentions: { parse: [] },
       ...(attachments.length > 0 ? { files: attachments } : {}),
     });
     return { sentFiles: attachments.length };

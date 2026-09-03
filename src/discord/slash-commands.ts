@@ -41,7 +41,7 @@ import {
   getDesiredThinkingLevel,
   type EffectiveChannelSettings,
 } from '../agent/channel-settings.js';
-import { abortChannelTask } from '../agent/queue.js';
+import { abortChannelTask, isChannelProcessing } from '../agent/queue.js';
 import { rotateChannelSessionDir } from '../session/path.js';
 import type { RegisteredChannel } from '../types.js';
 
@@ -190,10 +190,22 @@ export async function handleChatCommand(interaction: ChatInputCommandInteraction
   }
 }
 
-async function handleNew(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function handleNew(interaction: ChatInputCommandInteraction): Promise<void> {
   const channel = ensureManagedChannel(interaction);
   if (!channel) {
     await interaction.reply(reply(notRegisteredMessage(), interaction));
+    return;
+  }
+
+  // UX guard (sync, no race — but rotating the session dir under a running pi
+  // would strand the in-flight run's output in the archived folder).
+  if (isChannelProcessing(channel.jid)) {
+    await interaction.reply(
+      reply(
+        'This channel is currently processing a message. Wait for it to finish, then run /new again.',
+        interaction,
+      ),
+    );
     return;
   }
 
