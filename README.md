@@ -113,7 +113,7 @@ The gateway exposes two capabilities through its CLI that **pi itself can invoke
 
 For example, you can say to pi:
 
-> _"Create a daily task at 9am UTC that generates a summary report"_
+> _"Create a daily task at 9am that generates a summary report"_
 > _"Send me report.pdf with a message saying here you go"_
 > _"Set a one-time reminder for the 2pm meeting today"_
 
@@ -141,6 +141,8 @@ piscord task add \
 ```
 
 The `--schedule` value uses standard 5-field cron syntax (`minute hour day month weekday`). For one-time tasks, add `--once` and pass an ISO 8601 datetime.
+
+Cron schedules are evaluated in the **gateway host's local timezone**. The same applies to `--once` ISO datetimes without an explicit UTC offset — append `Z` (e.g. `2026-09-01T09:00:00Z`) to pin them to UTC.
 
 **Task management** — also available via pi:
 
@@ -209,7 +211,7 @@ Most users won't need to edit this file directly — `piscord setup` generates i
 | `CHANNEL_POLICY`             | `open`                          | Channel access: `open`, `open-trigger`, or `allowlist`                                                                           |
 | `EXCLUDED_CHANNELS`          | _(none)_                        | Comma-separated channel IDs to exclude from auto-registration                                                                    |
 | `MAX_CONCURRENCY`            | `3`                             | Max parallel pi invocations                                                                                                      |
-| `MAX_SCHEDULED_CONCURRENCY`  | `1`                             | Max scheduled tasks enqueued per tick                                                                                            |
+| `MAX_SCHEDULED_CONCURRENCY`  | `5`                             | Max scheduled tasks enqueued per tick (execution is still serialized by `MAX_CONCURRENCY`)                                       |
 | `POLL_INTERVAL_MS`           | `1000`                          | Queue poll interval (ms)                                                                                                         |
 | `SHUTDOWN_TIMEOUT_MS`        | `15000`                         | Graceful shutdown timeout (ms)                                                                                                   |
 | `AUTO_REGISTER_DMS`          | `true`                          | Auto-register DM channels                                                                                                        |
