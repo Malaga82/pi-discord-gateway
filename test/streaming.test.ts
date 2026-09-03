@@ -167,3 +167,31 @@ describe('finalizeStream return', () => {
     await expect(finalizeStream(handle, 'x')).resolves.toBeUndefined();
   });
 });
+
+describe('renderToolLine redaction', () => {
+  it('redacts credentials inside tool arguments before they reach the channel', () => {
+    const state = createStreamState();
+    applyEvent(state, {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'toolCall',
+            name: 'bash',
+            arguments: {
+              command:
+                'curl -H "Authorization: Bearer ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456" https://api.example.com --data api_key=AIzaSyAbcdefGHIJKLMNOPQRSTUVWXYZ1234567',
+            },
+          },
+        ],
+      },
+    });
+
+    const log = renderLog(state);
+    expect(log).not.toMatch(/ghp_[A-Za-z0-9_-]{8,}/);
+    expect(log).not.toMatch(/AIza[A-Za-z0-9_-]{8,}/);
+    expect(log).toContain('[REDACTED]');
+    expect(log).toContain('💻');
+  });
+});

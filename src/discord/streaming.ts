@@ -164,6 +164,15 @@ function renderToolLine(toolCall: any): string {
         : JSON.stringify(args);
   }
   argPreview = String(argPreview).replace(/\s+/gu, ' ').replace(/`/gu, "'").trim();
+  // The activity log persists in the channel scrollback: strip credentials
+  // that would otherwise land there verbatim (curl -H "Authorization: …",
+  // exported tokens, API keys pasted in commands).
+  argPreview = argPreview
+    .replace(
+      /(authorization|bearer|token|api[_-]?key|password|secret)\s*[:=]\s*\S+/gi,
+      '$1: [REDACTED]',
+    )
+    .replace(/\b(sk|ghp|gho|xox[baprs]|AIza)[A-Za-z0-9_-]{8,}/g, '[REDACTED]');
   const short = argPreview.length > ARG_MAX ? `${argPreview.slice(0, ARG_MAX)}…` : argPreview;
   return short ? `${meta.emoji} ${meta.verb} \`${short}\`` : `${meta.emoji} ${meta.verb}`;
 }
