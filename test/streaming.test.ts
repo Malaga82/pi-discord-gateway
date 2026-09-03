@@ -194,4 +194,73 @@ describe('renderToolLine redaction', () => {
     expect(log).toContain('[REDACTED]');
     expect(log).toContain('💻');
   });
+
+  it('redacts opaque bearer tokens after the scheme word (JWT regression)', () => {
+    const state = createStreamState();
+    applyEvent(state, {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'toolCall',
+            name: 'bash',
+            arguments: {
+              command:
+                'curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjMifQ.abc123" https://api.example.com',
+            },
+          },
+        ],
+      },
+    });
+
+    const log = renderLog(state);
+    expect(log).not.toMatch(/eyJ[A-Za-z0-9._-]{10,}/);
+    expect(log).toMatch(/Authorization:\s*\[REDACTED\]/);
+  });
+
+  it('redacts space-separated secret flags and URL credentials', () => {
+    const state = createStreamState();
+    applyEvent(state, {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'toolCall',
+            name: 'bash',
+            arguments: {
+              command:
+                'aws s3 ls --secret-access-key wJalrXUtnFEMIverysecretkey123 && psql postgres://admin:hunter2secret@db.host/app',
+            },
+          },
+        ],
+      },
+    });
+
+    const log = renderLog(state);
+    expect(log).not.toContain('wJalrXUtnFEMIverysecretkey123');
+    expect(log).not.toContain('hunter2secret');
+    expect(log).toContain('secret-access-key [REDACTED]');
+    expect(log).toContain('postgres://admin:[REDACTED]@');
+  });
+
+  it('leaves innocuous commands untouched', () => {
+    const state = createStreamState();
+    applyEvent(state, {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'toolCall',
+            name: 'bash',
+            arguments: { command: 'npm run build && node dist/index.js' },
+          },
+        ],
+      },
+    });
+
+    expect(renderLog(state)).toBe('💻 Running `npm run build && node dist/index.js`');
+  });
 });

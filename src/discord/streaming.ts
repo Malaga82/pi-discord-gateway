@@ -165,13 +165,18 @@ function renderToolLine(toolCall: any): string {
   }
   argPreview = String(argPreview).replace(/\s+/gu, ' ').replace(/`/gu, "'").trim();
   // The activity log persists in the channel scrollback: strip credentials
-  // that would otherwise land there verbatim (curl -H "Authorization: …",
-  // exported tokens, API keys pasted in commands).
+  // that would otherwise land there verbatim. The first pattern eats the
+  // scheme word too ("Authorization: Bearer eyJ…" — a naive \S+ would stop
+  // at the space and leak the token itself); the second covers
+  // user:password@host URLs; the third catches well-known token prefixes
+  // regardless of keywords. Known ceiling: `curl -u admin:hunter2` (no
+  // keyword) stays visible — that's real secret-scanner territory.
   argPreview = argPreview
     .replace(
-      /(authorization|bearer|token|api[_-]?key|password|secret)\s*[:=]\s*\S+/gi,
-      '$1: [REDACTED]',
+      /(authorization|bearer|token|api[_-]?key|secret[_-]?access[_-]?key|password|passwd|secret)([\s:=]+)(bearer\s+|basic\s+)?\S+/gi,
+      '$1$2[REDACTED]',
     )
+    .replace(/(\/\/[^:/\s]+:)[^@\s]+@/g, '$1[REDACTED]@')
     .replace(/\b(sk|ghp|gho|xox[baprs]|AIza)[A-Za-z0-9_-]{8,}/g, '[REDACTED]');
   const short = argPreview.length > ARG_MAX ? `${argPreview.slice(0, ARG_MAX)}…` : argPreview;
   return short ? `${meta.emoji} ${meta.verb} \`${short}\`` : `${meta.emoji} ${meta.verb}`;
