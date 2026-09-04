@@ -128,6 +128,10 @@ export function applyEvent(state: StreamState, event: PiEvent): void {
     const message = event.message;
     if (message.role === 'toolResult') return;
     if (message.role === 'assistant' && Array.isArray(message.content)) {
+      // Only tool-bearing messages have their text logged (Hermes preamble):
+      // a text-only assistant message is an answer, never an interstitial —
+      // it must not enter the log truncated next to its full delivery below.
+      const hasToolCall = message.content.some((block: any) => block?.type === 'toolCall');
       // Single pass in content order: a harmony-style preamble (user-facing
       // text emitted before tool calls) must sit ABOVE its tool lines.
       for (const block of message.content) {
@@ -135,6 +139,7 @@ export function applyEvent(state: StreamState, event: PiEvent): void {
           pushLog(state, renderToolLine(block), 'tool');
         } else if (
           config.streaming === 'tools' &&
+          hasToolCall &&
           block.type === 'text' &&
           typeof block.text === 'string' &&
           block.text.trim()

@@ -23,16 +23,16 @@ function makeHandle(edit: (content: string) => Promise<void>): StreamHandle {
 }
 
 describe('stripDuplicateTail', () => {
-  it('strips a long (>500 char, truncated in the log) single-block final answer', () => {
+  it('text-only assistant messages never enter the log (no truncated dup of the delivered answer)', () => {
     const state = createStreamState();
     const longAnswer = 'Risposta finale abbastanza lunga. '.repeat(30); // ~1k chars
     applyEvent(state, {
       type: 'message_end',
       message: { role: 'assistant', content: [{ type: 'text', text: longAnswer }] },
     });
-    // condense() truncated the log entry to 500 chars + '…' (a PREFIX of the answer).
-    expect(state.log[0].text.endsWith('…')).toBe(true);
-
+    // The answer is delivered below as its own message; a 500-char flattened
+    // copy in the activity log would be pure duplication.
+    expect(renderLog(state)).toBe('');
     stripDuplicateTail(state, longAnswer);
     expect(renderLog(state)).toBe('');
   });
@@ -46,6 +46,7 @@ describe('stripDuplicateTail', () => {
       message: {
         role: 'assistant',
         content: [
+          { type: 'toolCall', name: 'bash', arguments: { command: 'ls' } },
           { type: 'text', text: shortBlock },
           { type: 'text', text: longBlock },
         ],
@@ -53,19 +54,23 @@ describe('stripDuplicateTail', () => {
     });
 
     stripDuplicateTail(state, `${shortBlock}\n${longBlock}`);
-    expect(renderLog(state)).toBe('');
+    expect(renderLog(state)).not.toContain(shortBlock);
+    expect(renderLog(state)).not.toContain('…');
   });
 
-  it('preserves line structure of multi-line text blocks (no glued headers/tables)', () => {
+  it('preserves line structure of multi-line preamble text (no glued headers/tables)', () => {
     const state = createStreamState();
     applyEvent(state, {
       type: 'message_end',
       message: {
         role: 'assistant',
-        content: [{ type: 'text', text: '# Titolo\n\n| a | b |\n|---|---|\n| 1 | 2 |' }],
+        content: [
+          { type: 'toolCall', name: 'bash', arguments: { command: 'ls' } },
+          { type: 'text', text: '# Titolo\n\n| a | b |\n|---|---|\n| 1 | 2 |' },
+        ],
       },
     });
-    expect(state.log[0].text).toBe('# Titolo\n| a | b |\n|---|---|\n| 1 | 2 |');
+    expect(state.log.some((e) => e.text.includes('# Titolo\n| a | b |'))).toBe(true);
   });
 
   it('strips a line-preserved truncated entry against a flattened final answer', () => {
@@ -73,11 +78,17 @@ describe('stripDuplicateTail', () => {
     const longAnswer = '# Titolo\n\nRiga di risposta. '.repeat(30);
     applyEvent(state, {
       type: 'message_end',
-      message: { role: 'assistant', content: [{ type: 'text', text: longAnswer }] },
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'toolCall', name: 'bash', arguments: { command: 'ls' } },
+          { type: 'text', text: longAnswer },
+        ],
+      },
     });
-    expect(state.log[0].text).toContain('\n');
+    expect(state.log.some((e) => e.text.includes('\n'))).toBe(true);
     stripDuplicateTail(state, longAnswer);
-    expect(renderLog(state)).toBe('');
+    expect(renderLog(state)).not.toContain('Titolo');
   });
 
   it('strips a single-block final answer from the log tail', () => {
