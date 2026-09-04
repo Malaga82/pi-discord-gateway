@@ -56,6 +56,30 @@ describe('stripDuplicateTail', () => {
     expect(renderLog(state)).toBe('');
   });
 
+  it('preserves line structure of multi-line text blocks (no glued headers/tables)', () => {
+    const state = createStreamState();
+    applyEvent(state, {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: '# Titolo\n\n| a | b |\n|---|---|\n| 1 | 2 |' }],
+      },
+    });
+    expect(state.log[0].text).toBe('# Titolo\n| a | b |\n|---|---|\n| 1 | 2 |');
+  });
+
+  it('strips a line-preserved truncated entry against a flattened final answer', () => {
+    const state = createStreamState();
+    const longAnswer = '# Titolo\n\nRiga di risposta. '.repeat(30);
+    applyEvent(state, {
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: longAnswer }] },
+    });
+    expect(state.log[0].text).toContain('\n');
+    stripDuplicateTail(state, longAnswer);
+    expect(renderLog(state)).toBe('');
+  });
+
   it('strips a single-block final answer from the log tail', () => {
     const state = createStreamState();
     applyEvent(state, {

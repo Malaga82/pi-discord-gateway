@@ -183,7 +183,14 @@ function renderToolLine(toolCall: any): string {
 }
 
 function condense(text: string): string {
-  const flat = text.replace(/\s+/gu, ' ').trim();
+  // Preserve the block's line structure (headers, tables, lists stay readable)
+  // while keeping the log Hermes-tight: trim each line, drop blanks. Known
+  // ceiling: Discord renders no markdown tables, so pipe rows stay literal.
+  const flat = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join('\n');
   return flat.length > INTERSTITIAL_MAX ? `${flat.slice(0, INTERSTITIAL_MAX)}…` : flat;
 }
 
@@ -381,7 +388,9 @@ export function stripDuplicateTail(state: StreamState, final?: string): void {
     const last = state.log[state.log.length - 1];
     if (last.kind !== 'text') break;
     const truncated = /…$/u.test(last.text.trim());
-    const probe = last.text.replace(/…+$/u, '').trim();
+    // Entries are line-preserved but `remaining` is whitespace-flattened:
+    // flatten the probe too or multi-line blocks would never match.
+    const probe = last.text.replace(/…+$/u, '').trim().replace(/\s+/gu, ' ');
     if (!probe || !remaining) break;
 
     let consumed = false;
