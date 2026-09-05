@@ -254,7 +254,10 @@ async function processMessage(
     });
 
     if (signal.aborted) {
-      markMessageFailed(rowid);
+      // Shutdown interrupted processing: leave the row 'processing' so
+      // recoverStuckMessages() at the next boot re-enqueues it — the turn is
+      // regenerated and delivered without user action. Marking it failed here
+      // would silently drop the user's message.
       if (stream) await finalizeStream(stream, undefined); // preserve activity log
       logger.info({ jid, rowid }, 'Message abandoned: shutdown interrupted processing');
       return;
@@ -282,11 +285,13 @@ async function processMessage(
     if (result.killed) {
       // pi was SIGTERM'd (gateway restart/stop): keep the activity log,
       // don't delete history and don't spam a ⚠️ error message.
-      markMessageFailed(rowid);
+      // Leave the row 'processing': recoverStuckMessages() at the next boot
+      // re-enqueues it and the answer is regenerated (--continue keeps the
+      // session) — the reply reaches Discord without the user re-asking.
       if (stream) await finalizeStream(stream, undefined);
       logger.warn(
         { jid, rowid, error: result.error },
-        'pi killed (shutdown/restart); activity log preserved',
+        'pi killed (shutdown/restart); message left recoverable for next boot',
       );
       return;
     }
@@ -314,7 +319,8 @@ async function processMessage(
     logger.warn({ jid, error: result.error }, 'Agent returned error');
   } catch (err: any) {
     if (signal.aborted) {
-      markMessageFailed(rowid);
+      // Shutdown interrupted processing: same recovery contract as the
+      // post-invoke branch — keep the row for the next boot's re-enqueue.
       if (stream) await finalizeStream(stream, undefined); // preserve activity log
       logger.info({ jid, rowid }, 'Message abandoned: shutdown interrupted processing');
       return;
