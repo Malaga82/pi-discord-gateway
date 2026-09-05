@@ -69,12 +69,21 @@ export function startProcessingLoop(): void {
 
   // Recover messages stuck in 'processing' from a previous crash; ones over
   // the attempt budget die as failed (they keep killing pi — OOM prompts etc).
-  const { recovered, abandoned } = recoverStuckMessages(config.maxMessageAttempts);
+  const { recovered, abandoned, abandonedJids } = recoverStuckMessages(config.maxMessageAttempts);
   if (abandoned > 0) {
     logger.warn(
       { abandoned, maxAttempts: config.maxMessageAttempts },
       'Abandoned stuck messages over attempt budget',
     );
+  }
+  // Tell the authors their message died — silence is the worst outcome. The
+  // bot is already connected when the loop starts; best-effort, never wedge
+  // the boot on it.
+  for (const jid of abandonedJids) {
+    sendResponse(
+      jid,
+      `⚠️ A message was discarded after ${config.maxMessageAttempts} failed attempts (the agent process died on every retry). Please try again, possibly rephrasing or removing heavy attachments.`,
+    ).catch(() => undefined);
   }
   if (recovered > 0) {
     logger.info({ count: recovered }, 'Recovered stuck messages');
@@ -282,8 +291,14 @@ async function processMessage(
     if (result.ok) {
       if (stream) await finalizeStream(stream, result.text);
       // Answer is always delivered as its own message(s) below the log.
-      const sent = await sendResponse(jid, result.text);
+      const sent = await sendResponse(jid, result.text, signal);
       if (!sent) {
+        if (signal.aborted) {
+          // Shutdown cut the delivery mid-backoff: same recovery contract as
+          // above — the row stays 'processing' for the next boot.
+          logger.info({ jid, rowid }, 'Delivery aborted by shutdown; message left recoverable');
+          return;
+        }
         markMessageFailed(rowid);
         logger.warn({ jid }, 'Agent response generated but could not be delivered to Discord');
         return;

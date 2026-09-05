@@ -325,7 +325,11 @@ export function recordBotPeerMessage(
 
 const DISCORD_MAX_LENGTH = 2000;
 
-export async function sendResponse(jid: string, text: string): Promise<boolean> {
+export async function sendResponse(
+  jid: string,
+  text: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
   if (!client) return false;
 
   const channelId = jid.replace(/^dc:/, '');
@@ -340,14 +344,14 @@ export async function sendResponse(jid: string, text: string): Promise<boolean> 
     const textChannel = channel as TextChannel | DMChannel;
 
     if (text.length <= DISCORD_MAX_LENGTH) {
-      await sendChunkWithRetry(textChannel, text);
+      await sendChunkWithRetry(textChannel, text, signal);
     } else {
       // Split at line boundaries when possible
       const chunks = splitMessage(text, DISCORD_MAX_LENGTH);
       let sent = 0;
       try {
         for (const chunk of chunks) {
-          await sendChunkWithRetry(textChannel, chunk);
+          await sendChunkWithRetry(textChannel, chunk, signal);
           sent += 1;
         }
       } catch (err: any) {
@@ -481,10 +485,13 @@ export function splitMessage(text: string, max: number): string[] {
 /** Send one chunk, retrying transient failures (429 / 5xx / network) with
  * bounded exponential backoff. Non-transient errors (400/403/…) fail fast: a
  * retry would just burn time and fail identically. allowedMentions parse:[]
- * keeps model-generated <@id>/<@&role>/@everyone from pinging anyone. */
+ * keeps model-generated <@id>/<@&role>/@everyone from pinging anyone.
+ * Abort-aware: a shutdown signal cuts the backoff short instead of holding
+ * the channel through up to 12s of sleeps per chunk. */
 export async function sendChunkWithRetry(
   textChannel: TextChannel | DMChannel,
   chunk: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const DELAYS = [1_000, 3_000, 8_000];
   for (let attempt = 0; ; attempt++) {
@@ -495,7 +502,7 @@ export async function sendChunkWithRetry(
       const status: unknown = err?.status;
       const transient =
         status === undefined || status === 429 || (typeof status === 'number' && status >= 500);
-      if (!transient || attempt >= DELAYS.length) throw err;
+      if (!transient || attempt >= DELAYS.length || signal?.aborted) throw err;
       const reported: unknown = err?.timeToReset ?? err?.retryAfter;
       const wait = typeof reported === 'number' ? reported : DELAYS[attempt];
       const jitter = Math.random() * 250; // parallel chunks must not retry in sync
@@ -504,6 +511,7 @@ export async function sendChunkWithRetry(
         'Chunk send failed, retrying',
       );
       await new Promise((resolve) => setTimeout(resolve, wait + jitter));
+      if (signal?.aborted) throw err; // stop mid-backoff, don't retry after abort
     }
   }
 }

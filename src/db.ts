@@ -296,18 +296,24 @@ export function clearPendingMessages(channelJid: string): number {
 export function recoverStuckMessages(maxAttempts: number): {
   recovered: number;
   abandoned: number;
+  abandonedJids: string[];
 } {
   // Order matters: rows over the attempt budget die first, the rest get a
   // second life. A row over budget is one that repeatedly killed pi (e.g.
   // OOM on a heavy prompt) — re-enqueuing it forever would wedge the gateway.
-  const abandoned = prep(
+  const abandonedRows = prep(
     `update message_queue set status = 'failed', processed_at = datetime('now')
-     where status = 'processing' and attempts >= ?`,
-  ).run(maxAttempts).changes;
+     where status = 'processing' and attempts >= ?
+     returning channel_jid`,
+  ).all(maxAttempts) as Array<{ channel_jid: string }>;
   const recovered = prep(
     "update message_queue set status = 'pending' where status = 'processing'",
   ).run().changes;
-  return { recovered, abandoned };
+  return {
+    recovered,
+    abandoned: abandonedRows.length,
+    abandonedJids: [...new Set(abandonedRows.map((r) => r.channel_jid))],
+  };
 }
 
 /** Get channels that have pending messages */

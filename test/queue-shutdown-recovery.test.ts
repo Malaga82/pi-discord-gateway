@@ -116,7 +116,7 @@ describe('killed message recovery', () => {
       // No answer was delivered (nothing to deliver), and the row must NOT
       // be 'failed': the next boot's recoverStuckMessages() has to pick it up.
       expect(sendResponseMock).not.toHaveBeenCalled();
-      expect(db.recoverStuckMessages()).toBe(1);
+      expect(db.recoverStuckMessages(3).recovered).toBe(1);
     } finally {
       queue.stopProcessingLoop({ timeoutMs: 0 });
     }
@@ -190,7 +190,69 @@ describe('killed message recovery', () => {
       );
 
       // The stopped task must NOT come back at the next boot.
-      expect(db.recoverStuckMessages()).toBe(0);
+      expect(db.recoverStuckMessages(3).recovered).toBe(0);
+    } finally {
+      queue.stopProcessingLoop({ timeoutMs: 0 });
+    }
+  });
+
+  it('notifies the channel when a message is abandoned over the attempt budget', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'pidg-queue-abandon-'));
+    tempDirs.push(tempDir);
+
+    process.env.DB_PATH = ':memory:';
+    process.env.SESSIONS_DIR = resolve(tempDir, 'sessions');
+    process.env.POLL_INTERVAL_MS = '1';
+    process.env.MAX_CONCURRENCY = '1';
+    process.env.PI_CWD = '/global/project';
+
+    invokeAgentMock.mockResolvedValue({ ok: true, text: 'unused' });
+    sendResponseMock.mockResolvedValue(true);
+    setTypingMock.mockResolvedValue(undefined);
+
+    vi.resetModules();
+    const db = await import('../src/db.js');
+    const queue = await import('../src/agent/queue.js');
+
+    db.initDb();
+
+    try {
+      db.registerChannel({
+        jid: 'dc:123',
+        name: 'abandon test',
+        folder: 'ch_123',
+        requiresTrigger: false,
+        isMain: false,
+        modelOverride: '',
+        thinkingOverride: '',
+        cwdOverride: '',
+      });
+      db.enqueueMessage({
+        channelJid: 'dc:123',
+        sender: 'u_1',
+        senderName: 'Alice',
+        content: 'oom bait',
+        timestamp: new Date().toISOString(),
+      });
+
+      // Burn the attempt budget: three claim cycles with reboots between.
+      for (let i = 0; i < 3; i++) {
+        expect(db.claimNextMessage('dc:123')?.attempts).toBe(i + 1);
+        if (i < 2) db.recoverStuckMessages(3);
+      }
+      // Row is 'processing' with attempts = 3 → the next boot abandons it.
+
+      queue.startProcessingLoop();
+      await vi.waitFor(
+        () => {
+          expect(sendResponseMock).toHaveBeenCalledTimes(1);
+        },
+        { timeout: 2000, interval: 10 },
+      );
+
+      const [jid, notice] = sendResponseMock.mock.calls[0];
+      expect(jid).toBe('dc:123');
+      expect(String(notice)).toMatch(/discarded/i);
     } finally {
       queue.stopProcessingLoop({ timeoutMs: 0 });
     }
