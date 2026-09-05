@@ -298,4 +298,54 @@ describe('renderToolLine redaction', () => {
 
     expect(renderLog(state)).toBe('💻 Running `npm run build && node dist/index.js`');
   });
+
+  it('redacts secret-keyed fields in JSON-serialized object args (quoted separator regression)', () => {
+    const state = createStreamState();
+    applyEvent(state, {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'toolCall',
+            name: 'mcp_tool',
+            arguments: { api_key: 'hunter2supersecretvalue', region: 'eu' },
+          },
+        ],
+      },
+    });
+    const log = renderLog(state);
+    expect(log).not.toContain('hunter2supersecretvalue');
+    expect(log).toContain('[REDACTED]');
+  });
+
+  it('renders the first STRING among command/path/query/url, never [object Object]', () => {
+    const state = createStreamState();
+    applyEvent(state, {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'toolCall',
+            name: 'custom_tool',
+            arguments: { command: { nested: true }, path: '/tmp/ok.txt' },
+          },
+        ],
+      },
+    });
+    expect(renderLog(state)).toContain('/tmp/ok.txt');
+    expect(renderLog(state)).not.toContain('[object Object]');
+  });
+
+  it('caps accumulated thinking deltas', () => {
+    const state = createStreamState();
+    for (let i = 0; i < 500; i++) {
+      applyEvent(state, {
+        type: 'message_update',
+        assistantMessageEvent: { type: 'thinking_delta', delta: 'x'.repeat(100) },
+      });
+    }
+    expect(state.thinking.length).toBeLessThanOrEqual(4000);
+  });
 });

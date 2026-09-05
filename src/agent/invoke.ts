@@ -521,7 +521,9 @@ async function getSessionStatsViaRpc(
       if (finished) return;
       finished = true;
       clearTimeout(timeout);
-      if (escalationTimer) clearTimeout(escalationTimer);
+      // NOTE: escalationTimer is deliberately NOT cleared here — finish() runs
+      // immediately after SIGTERM, and clearing would cancel the SIGKILL
+      // escalation before it ever fires. The 'close' handler clears it.
       if (err) {
         reject(err);
         return;
@@ -582,6 +584,7 @@ async function getSessionStatsViaRpc(
     proc.on('error', (err) => finish(err));
     proc.on('close', (code) => {
       reader.end();
+      if (escalationTimer) clearTimeout(escalationTimer);
 
       if (code !== 0) {
         const stderr = Buffer.concat(errChunks).toString('utf-8').trim();
@@ -604,8 +607,10 @@ function readTailLines(sessionFile: string, maxBytes: number): string[] {
     const size = fstatSync(fd).size;
     const start = Math.max(0, size - maxBytes);
     const buffer = Buffer.alloc(size - start);
-    readSync(fd, buffer, 0, buffer.length, start);
-    const lines = buffer.toString('utf-8').split(/\r?\n/u);
+    // readSync may return a short read: slice to what was actually read,
+    // or the tail of the buffer stays zero-filled (NULs in the output).
+    const read = readSync(fd, buffer, 0, buffer.length, start);
+    const lines = buffer.subarray(0, read).toString('utf-8').split(/\r?\n/u);
     if (start > 0) lines.shift(); // drop the possibly partial first line
     return lines;
   } finally {

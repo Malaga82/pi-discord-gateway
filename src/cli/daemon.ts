@@ -139,6 +139,9 @@ export function buildPeerSymlinkExecStartPre(
   const piAi = exists(piAiNested) ? piAiNested : exists(piAiTop) ? piAiTop : undefined;
 
   const linkDir = join(nodeModulesRoot, '@earendil-works');
+  // npm-global install: piscord lives in the same node_modules as its peers,
+  // so the "symlink" would rm -rf the real package. Nothing to link.
+  if (resolve(linkDir) === resolve(peerDir)) return undefined;
   const q = (path: string) => `"${path}"`;
   // rm -rf first: `ln -sfn` on an existing REAL directory would nest the
   // symlink inside it instead of replacing it.

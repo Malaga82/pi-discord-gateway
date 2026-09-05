@@ -33,6 +33,19 @@ describe('buildPeerSymlinkExecStartPre', () => {
   const cliPath = '/root/.pi/agent/npm/node_modules/piscord/dist/cli/index.js';
   const globalRoot = '/usr/local/lib/node_modules';
 
+  it('returns undefined on npm-global installs (linkDir == peerDir would rm -rf the real package)', () => {
+    const globalCliPath = `${globalRoot}/piscord/dist/cli/index.js`;
+    const existing = new Set([
+      `${globalRoot}/@earendil-works/pi-coding-agent`,
+      `${globalRoot}/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai`,
+    ]);
+    const line = buildPeerSymlinkExecStartPre(globalCliPath, {
+      globalRoot,
+      fsExists: (path) => existing.has(path),
+    });
+    expect(line).toBeUndefined();
+  });
+
   it('links both peers when both exist in the global root, replacing real dirs safely', () => {
     const existing = new Set([
       `${globalRoot}/@earendil-works/pi-coding-agent`,

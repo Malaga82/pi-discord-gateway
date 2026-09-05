@@ -57,4 +57,33 @@ describe('splitMessage', () => {
     const reassembled = chunks.join('').replace(/```js\n|\n?```/g, '');
     expect(reassembled.replace(/\s+/g, '')).toBe('x'.repeat(6000));
   });
+
+  it('terminates (no amplification) when a fence line is nearly as long as the cap', () => {
+    // Regression: a 1996+ char fence line made the reopen step eat the whole
+    // progress budget — infinite loop and OOM. The tail may flow unfenced.
+    for (const fenceLen of [1988, 1993, 1995, 1996, 1999, 2103]) {
+      const text = '```' + 'a'.repeat(fenceLen - 3) + '\n' + 'x'.repeat(1050);
+      const chunks = splitMessage(text, 2000);
+      expect(chunks.length).toBeLessThanOrEqual(3);
+      const reassembled = chunks.join('');
+      for (const ch of text) {
+        expect(reassembled).toContain(ch === '\n' ? '\n' : ch);
+      }
+      // No character loss: total content length preserved (minus at most the
+      // boundary newlines the splitter is allowed to drop).
+      expect(reassembled.replace(/\n/g, '').length).toBeGreaterThanOrEqual(
+        text.replace(/\n/g, '').length - 2,
+      );
+    }
+  });
+
+  it('always makes progress on pathological inputs (hard-split fallback)', () => {
+    // Single line, no newline at all, longer than max → plain hard split.
+    const text = 'y'.repeat(5000);
+    const chunks = splitMessage(text, 2000);
+    expect(chunks.join('')).toBe(text);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(2000);
+    }
+  });
 });

@@ -26,6 +26,9 @@ const LOG_MAX_ENTRIES = 14;
 const LOG_MAX_CHARS = 1600;
 const ARG_MAX = 80;
 const INTERSTITIAL_MAX = 500;
+// Accumulated thinking is only ever rendered as a 200-char tail; keep the
+// raw string bounded so long sessions can't balloon it.
+const THINKING_CAP = 4_000;
 const SENTENCE_MAX = 200;
 
 const TOOL_META: Record<string, { emoji: string; verb: string }> = {
@@ -116,7 +119,9 @@ export function applyEvent(state: StreamState, event: PiEvent): void {
   if (type === 'message_update' && event.assistantMessageEvent) {
     const ev = event.assistantMessageEvent;
     if (ev.type === 'thinking_delta' && ev.delta) {
-      state.thinking += ev.delta;
+      // Cap accumulation: rendering tails this anyway, and an unbounded
+      // string would grow with every thinking_delta of a long session.
+      state.thinking = `${state.thinking}${ev.delta}`.slice(-THINKING_CAP);
     } else if (ev.type === 'text_delta' && ev.delta) {
       state.text += ev.delta;
     } else if (ev.type === 'toolcall_start') {
@@ -160,13 +165,18 @@ function renderToolLine(toolCall: any): string {
   if (typeof args === 'string') {
     argPreview = args;
   } else if (args && typeof args === 'object') {
+    // Pick the first STRING field — the any-of guard alone would happily
+    // render a non-string `command` as "[object Object]".
     argPreview =
-      typeof args.command === 'string' ||
-      typeof args.path === 'string' ||
-      typeof args.query === 'string' ||
-      typeof args.url === 'string'
-        ? (args.command ?? args.path ?? args.query ?? args.url)
-        : JSON.stringify(args);
+      typeof args.command === 'string'
+        ? args.command
+        : typeof args.path === 'string'
+          ? args.path
+          : typeof args.query === 'string'
+            ? args.query
+            : typeof args.url === 'string'
+              ? args.url
+              : JSON.stringify(args);
   }
   argPreview = String(argPreview).replace(/\s+/gu, ' ').replace(/`/gu, "'").trim();
   // The activity log persists in the channel scrollback: strip credentials
@@ -178,7 +188,7 @@ function renderToolLine(toolCall: any): string {
   // keyword) stays visible — that's real secret-scanner territory.
   argPreview = argPreview
     .replace(
-      /(authorization|bearer|token|api[_-]?key|secret[_-]?access[_-]?key|password|passwd|secret)([\s:=]+)(bearer\s+|basic\s+)?\S+/gi,
+      /(authorization|bearer|token|api[_-]?key|secret[_-]?access[_-]?key|password|passwd|secret)([\s:="']+)(bearer\s+|basic\s+)?\S+/gi,
       '$1$2[REDACTED]',
     )
     .replace(/(\/\/[^:/\s]+:)[^@\s]+@/g, '$1[REDACTED]@')

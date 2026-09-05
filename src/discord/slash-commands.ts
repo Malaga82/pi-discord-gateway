@@ -329,7 +329,10 @@ async function handleModelReset(interaction: ChatInputCommandInteraction): Promi
   clearChannelModelOverride(channel.jid);
 
   const updated = getChannel(channel.jid)!;
-  const effective = computeEffectiveChannelSettings(updated, { forceRefresh: true });
+  // Refresh via the async (execFile) path — the sync `forceRefresh` here used
+  // to run a blocking spawnSync on the Discord event loop for up to 15s.
+  await refreshModelCatalogAsync(updated.cwdOverride || config.piCwd);
+  const effective = computeEffectiveChannelSettings(updated);
   const notes = ['Model reset for this channel.'];
 
   if (updated.thinkingOverride && effective.thinkingAdjusted) {

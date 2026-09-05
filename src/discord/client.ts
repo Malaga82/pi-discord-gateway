@@ -287,6 +287,8 @@ async function handleMessage(message: Message): Promise<void> {
   if (replyPrefix) {
     content = `${replyPrefix}${content}`;
   }
+  // After the prefix concat: a bare `@bot` reply would otherwise become the
+  // non-empty string "[Reply to Bot] " and trigger a full pi run on nothing.
   if (!content) return;
 
   // ── Enqueue ──
@@ -353,7 +355,7 @@ export async function sendResponse(jid: string, text: string): Promise<boolean> 
           // The user already received part of the answer — tell them it was
           // truncated instead of silently marking the message failed.
           await textChannel
-            .send(`⚠️ Consegna interrotta: risposta troncata (${sent}/${chunks.length} parti).`)
+            .send(`⚠️ Delivery interrupted: response truncated (${sent}/${chunks.length} parts).`)
             .catch(() => undefined);
         }
         throw err;
@@ -434,7 +436,7 @@ export function splitMessage(text: string, max: number): string[] {
     // the reopen prefix adds, or `remaining` would grow and loop forever
     // (degenerate case: the only newline nearby is the fence line itself).
     if (fenceLines.length % 2 === 1 && rest) {
-      const openFence = fenceLines[fenceLines.length - 1] ?? '```';
+      let openFence = fenceLines[fenceLines.length - 1] ?? '```';
       const minSplit = openFence.length + 2;
       if (chunk.length > max - 4 || splitAt < minSplit) {
         splitAt = max - 4;
@@ -444,11 +446,27 @@ export function splitMessage(text: string, max: number): string[] {
         chunk = remaining.slice(0, splitAt);
         rest = remaining.slice(splitAt);
         fenceLines = chunk.match(/^```.*$/gm) ?? [];
+        openFence = fenceLines[fenceLines.length - 1] ?? '```';
       }
-      if (fenceLines.length % 2 === 1) {
+      // Reopening costs openFence.length+1 chars of the next iteration. If
+      // the fence dwarfs the remaining content (or nearly fills the cap),
+      // progress shrinks toward zero — up to an infinite loop. Leave the
+      // tail unfenced instead (degraded rendering beats a hung gateway).
+      if (
+        fenceLines.length % 2 === 1 &&
+        openFence.length + 1 < max - 4 &&
+        rest.length > openFence.length + 1
+      ) {
         chunk = `${chunk}\n\u0060\u0060\u0060`;
         rest = `${openFence}\n${rest.replace(/^\n/, '')}`;
       }
+    }
+
+    if (rest.length >= remaining.length) {
+      // Hard guarantee of forward progress, whatever the fence logic did.
+      chunks.push(remaining.slice(0, max));
+      remaining = remaining.slice(max);
+      continue;
     }
 
     chunks.push(chunk);

@@ -476,25 +476,35 @@ function ensureModelRuntime(): void {
   if (runtimeInitPromise || cachedRuntime) {
     return;
   }
-  runtimeInitPromise = ModelRuntime.create()
-    .then((runtime) => {
-      cachedRuntime = runtime;
-      // SDK metadata is now available: refresh known catalogs in the background.
-      // Never clear the cache here — an empty cache forces the hot message path
-      // back onto the blocking sync `pi --list-models` load.
-      for (const cwd of cacheByCwd.keys()) {
-        void refreshModelCatalogAsync(cwd);
-      }
-      return runtime;
-    })
-    .catch((err: unknown) => {
-      logger.warn(
-        { err: err instanceof Error ? err.message : String(err) },
-        'Failed to initialize pi ModelRuntime; SDK model metadata will be unavailable',
-      );
-      runtimeInitPromise = null;
-      return null;
-    });
+  // Wrap create() so a synchronous throw (partial/odd SDK builds) lands in
+  // the same warn-and-retry path as an async rejection instead of escaping.
+  try {
+    runtimeInitPromise = ModelRuntime.create()
+      .then((runtime) => {
+        cachedRuntime = runtime;
+        // SDK metadata is now available: refresh known catalogs in the background.
+        // Never clear the cache here — an empty cache forces the hot message path
+        // back onto the blocking sync `pi --list-models` load.
+        for (const cwd of cacheByCwd.keys()) {
+          void refreshModelCatalogAsync(cwd);
+        }
+        return runtime;
+      })
+      .catch((err: unknown) => {
+        logger.warn(
+          { err: err instanceof Error ? err.message : String(err) },
+          'Failed to initialize pi ModelRuntime; SDK model metadata will be unavailable',
+        );
+        runtimeInitPromise = null;
+        return null;
+      });
+  } catch (err: unknown) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'Failed to initialize pi ModelRuntime; SDK model metadata will be unavailable',
+    );
+    runtimeInitPromise = null;
+  }
 }
 
 function createModelRegistry(): { getAvailable(): AvailableModelInfoSource[] } {

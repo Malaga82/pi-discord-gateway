@@ -296,14 +296,15 @@ async function processMessage(
       // tools that did run before the kill.
       markMessageFailed(rowid);
       if (stream) await finalizeStream(stream, undefined);
-      await sendResponse(jid, `⚠️ ${result.error}`);
+      await sendResponse(jid, '⚠️ Agent invocation timed out — details in the gateway logs.');
       logger.warn({ jid, rowid, error: result.error }, 'Agent invocation timed out');
       return;
     }
 
     if (stream) await cancelStream(stream);
-    const errMsg = `⚠️ Agent error: ${result.error?.slice(0, 300) || 'unknown error'}`;
-    await sendResponse(jid, errMsg);
+    // Same discipline as the slash commands: no host internals (paths,
+    // stderr) reflected into the channel — the log line above carries them.
+    await sendResponse(jid, '⚠️ Agent error — details in the gateway logs.');
     markMessageFailed(rowid);
     logger.warn({ jid, error: result.error }, 'Agent returned error');
   } catch (err: any) {
@@ -318,7 +319,7 @@ async function processMessage(
     markMessageFailed(rowid);
     if (stream) await cancelStream(stream);
     try {
-      await sendResponse(jid, `⚠️ Internal error: ${err.message?.slice(0, 200)}`);
+      await sendResponse(jid, '⚠️ Internal error — details in the gateway logs.');
     } catch {
       // Nothing else to do here.
     }
