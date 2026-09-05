@@ -7,6 +7,7 @@ import { startMediaCleanup } from './session/media.js';
 import { refreshModelCatalogAsync } from './agent/model-catalog.js';
 import { startProcessingLoop, stopProcessingLoop } from './agent/queue.js';
 import { startScheduler } from './agent/scheduler.js';
+import { acquireInstanceLock, releaseInstanceLock } from './single-instance.js';
 
 /**
  * pi-discord-gateway - Lightweight Discord gateway for pi coding agent.
@@ -22,6 +23,8 @@ export async function startGateway(): Promise<void> {
   }
 
   initDb();
+  const lockPath = `${config.dbPath}.lock`;
+  acquireInstanceLock(lockPath);
 
   let stopArchiveCleanup = () => {};
   let stopMediaCleanup = () => {};
@@ -65,6 +68,7 @@ export async function startGateway(): Promise<void> {
 
       stopDiscord();
       closeDb();
+      releaseInstanceLock(lockPath);
       logger.info('Gateway stopped');
     })();
 
