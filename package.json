@@ -41,7 +41,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "start": "node dist/cli/index.js start",
-    "dev": "tsx src/cli/index.ts start"
+    "dev": "tsx src/cli/index.ts start",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

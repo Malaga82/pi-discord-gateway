@@ -296,7 +296,8 @@ export function clearPendingMessages(channelJid: string): number {
 export function recoverStuckMessages(maxAttempts: number): {
   recovered: number;
   abandoned: number;
-  abandonedJids: string[];
+  /** One entry per affected channel, with how many rows died there. */
+  abandonedByChannel: Array<{ jid: string; count: number }>;
 } {
   // Order matters: rows over the attempt budget die first, the rest get a
   // second life. A row over budget is one that repeatedly killed pi (e.g.
@@ -309,10 +310,14 @@ export function recoverStuckMessages(maxAttempts: number): {
   const recovered = prep(
     "update message_queue set status = 'pending' where status = 'processing'",
   ).run().changes;
+  const counts = new Map<string, number>();
+  for (const row of abandonedRows) {
+    counts.set(row.channel_jid, (counts.get(row.channel_jid) ?? 0) + 1);
+  }
   return {
     recovered,
     abandoned: abandonedRows.length,
-    abandonedJids: [...new Set(abandonedRows.map((r) => r.channel_jid))],
+    abandonedByChannel: [...counts].map(([jid, count]) => ({ jid, count })),
   };
 }
 

@@ -1,3 +1,4 @@
+import type { ChatInputCommandInteraction } from 'discord.js';
 import { describe, expect, it, vi } from 'vitest';
 
 const { isChannelProcessingMock, getChannelMock, clearPendingMock, rotateMock } = vi.hoisted(
@@ -29,14 +30,18 @@ vi.mock('../src/session/path.js', () => ({
 }));
 
 function makeInteraction() {
-  return {
+  const interaction = {
     channelId: '42',
     guild: { id: 'g' },
     inGuild: () => true,
     user: { id: 'u1', username: 'tester' },
     options: { getSubcommand: () => 'new', getString: () => null },
     reply: vi.fn(async () => undefined),
-  } as never;
+  };
+  // Partial interaction shape: typed so reply() stays a vi.fn for assertions.
+  return interaction as unknown as ChatInputCommandInteraction & {
+    reply: ReturnType<typeof vi.fn>;
+  };
 }
 
 const channel = {

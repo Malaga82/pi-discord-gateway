@@ -510,7 +510,19 @@ export async function sendChunkWithRetry(
         { err: err?.message, status, waitMs: wait + jitter, attempt },
         'Chunk send failed, retrying',
       );
-      await new Promise((resolve) => setTimeout(resolve, wait + jitter));
+      // Interruptible sleep: an abort lands within the backoff window, not
+      // after it — a shutdown must not wait out a full 8s sleep per chunk.
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, wait + jitter);
+        signal?.addEventListener(
+          'abort',
+          () => {
+            clearTimeout(t);
+            resolve();
+          },
+          { once: true },
+        );
+      });
       if (signal?.aborted) throw err; // stop mid-backoff, don't retry after abort
     }
   }

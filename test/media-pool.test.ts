@@ -98,11 +98,11 @@ describe('downloadAttachments concurrency', () => {
     const media = await import('../src/session/media.js');
 
     const atts = [
-      { url: 'https://cdn.example/a.txt', name: 'a.txt', contentType: 'text/plain' },
-      { url: failingUrl, name: 'broken.png', contentType: 'image/png' },
-      { url: 'https://cdn.example/b.txt', name: 'b.txt', contentType: 'text/plain' },
-      { url: 'https://cdn.example/c.txt', name: 'c.txt', contentType: 'text/plain' },
-      { url: 'https://cdn.example/d.txt', name: 'd.txt', contentType: 'text/plain' },
+      { url: 'https://cdn.example/a.txt', name: 'a.txt', contentType: 'text/plain', size: 5 },
+      { url: failingUrl, name: 'broken.png', contentType: 'image/png', size: 5 },
+      { url: 'https://cdn.example/b.txt', name: 'b.txt', contentType: 'text/plain', size: 5 },
+      { url: 'https://cdn.example/c.txt', name: 'c.txt', contentType: 'text/plain', size: 5 },
+      { url: 'https://cdn.example/d.txt', name: 'd.txt', contentType: 'text/plain', size: 5 },
     ];
 
     const files = await media.downloadAttachments(atts, 'ch_test', 'msg1');

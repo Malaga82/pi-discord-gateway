@@ -69,7 +69,9 @@ export function startProcessingLoop(): void {
 
   // Recover messages stuck in 'processing' from a previous crash; ones over
   // the attempt budget die as failed (they keep killing pi — OOM prompts etc).
-  const { recovered, abandoned, abandonedJids } = recoverStuckMessages(config.maxMessageAttempts);
+  const { recovered, abandoned, abandonedByChannel } = recoverStuckMessages(
+    config.maxMessageAttempts,
+  );
   if (abandoned > 0) {
     logger.warn(
       { abandoned, maxAttempts: config.maxMessageAttempts },
@@ -79,10 +81,11 @@ export function startProcessingLoop(): void {
   // Tell the authors their message died — silence is the worst outcome. The
   // bot is already connected when the loop starts; best-effort, never wedge
   // the boot on it.
-  for (const jid of abandonedJids) {
+  for (const { jid, count } of abandonedByChannel) {
+    const subject = count === 1 ? 'A message was' : `${count} messages were`;
     sendResponse(
       jid,
-      `⚠️ A message was discarded after ${config.maxMessageAttempts} failed attempts (the agent process died on every retry). Please try again, possibly rephrasing or removing heavy attachments.`,
+      `⚠️ ${subject} discarded after ${config.maxMessageAttempts} failed attempts (the agent process died on every retry). Please try again, possibly rephrasing or removing heavy attachments.`,
     ).catch(() => undefined);
   }
   if (recovered > 0) {
@@ -296,6 +299,10 @@ async function processMessage(
         if (signal.aborted) {
           // Shutdown cut the delivery mid-backoff: same recovery contract as
           // above — the row stays 'processing' for the next boot.
+          // NOTE: chunks already delivered stay delivered, and the regenerated
+          // turn re-sends the whole response — early chunks can arrive twice.
+          // Accepted trade-off: complete-but-late beats truncated-forever;
+          // tracking delivered chunks would cost more than it is worth.
           logger.info({ jid, rowid }, 'Delivery aborted by shutdown; message left recoverable');
           return;
         }
