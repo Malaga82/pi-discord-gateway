@@ -67,8 +67,15 @@ export function startProcessingLoop(): void {
   running = true;
   stopPromise = null;
 
-  // Recover any messages stuck in 'processing' from a previous crash.
-  const recovered = recoverStuckMessages();
+  // Recover messages stuck in 'processing' from a previous crash; ones over
+  // the attempt budget die as failed (they keep killing pi — OOM prompts etc).
+  const { recovered, abandoned } = recoverStuckMessages(config.maxMessageAttempts);
+  if (abandoned > 0) {
+    logger.warn(
+      { abandoned, maxAttempts: config.maxMessageAttempts },
+      'Abandoned stuck messages over attempt budget',
+    );
+  }
   if (recovered > 0) {
     logger.info({ count: recovered }, 'Recovered stuck messages');
   }

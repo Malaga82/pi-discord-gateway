@@ -25,6 +25,8 @@ export interface QueuedMessage {
   status: 'pending' | 'processing' | 'done' | 'failed';
   /** JSON array of attachment metadata, or null */
   attachments: string | null;
+  /** Invocation attempts so far (incremented at claim; recovery gives up at max) */
+  attempts: number;
 }
 
 /** Agent invocation result */

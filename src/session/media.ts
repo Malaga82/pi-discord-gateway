@@ -15,6 +15,10 @@ import { type AttachmentMeta } from '../discord/attachments.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { resolveChannelMediaMessageDir } from './path.js';
+import { runPool } from '../util/run-pool.js';
+
+/** Discord allows 10 attachments per message; 4 keeps a small board clear. */
+const ATTACHMENT_CONCURRENCY = 4;
 
 /** A successfully downloaded file */
 export interface DownloadedFile {
@@ -48,9 +52,11 @@ export async function downloadAttachments(
   const mediaDir = resolveChannelMediaMessageDir(channelFolder, messageId);
   mkdirSync(mediaDir, { recursive: true });
 
-  const results: DownloadedFile[] = [];
-
-  for (const [index, att] of attachments.entries()) {
+  // Parallel with a cap: each download has a 30s stall watchdog, so n slow
+  // attachments used to serialize into n×30s of channel lock. Order of the
+  // result array stays = order of the message (buildAttachmentPathPrompt
+  // lists the paths to the model — "the first file" must stay the first).
+  const tasks = attachments.map((att, index) => async (): Promise<DownloadedFile | undefined> => {
     const safeName = sanitizeFilename(att.name || 'file');
     const fileName = index > 0 ? `${index}_${safeName}` : safeName;
     const filePath = join(mediaDir, fileName);
@@ -59,23 +65,25 @@ export async function downloadAttachments(
       await streamAttachmentToFile(att, filePath, signal);
       const fileStats = await stat(filePath);
 
-      results.push({
-        filePath,
-        originalName: att.name || 'file',
-        size: fileStats.size,
-        contentType: att.contentType || 'application/octet-stream',
-      });
       logger.debug(
         { name: att.name, size: fileStats.size, path: filePath },
         'Attachment downloaded',
       );
+      return {
+        filePath,
+        originalName: att.name || 'file',
+        size: fileStats.size,
+        contentType: att.contentType || 'application/octet-stream',
+      };
     } catch (err: any) {
       await rm(filePath, { force: true }).catch(() => undefined);
       logger.warn({ name: att.name, err: err.message }, 'Attachment download error');
+      return undefined;
     }
-  }
+  });
 
-  return results;
+  const settled = await runPool(tasks, ATTACHMENT_CONCURRENCY);
+  return settled.filter((r): r is DownloadedFile => r !== undefined);
 }
 
 /** Make filenames safe for the filesystem */

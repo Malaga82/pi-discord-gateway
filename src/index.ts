@@ -8,6 +8,7 @@ import { refreshModelCatalogAsync } from './agent/model-catalog.js';
 import { startProcessingLoop, stopProcessingLoop } from './agent/queue.js';
 import { startScheduler } from './agent/scheduler.js';
 import { acquireInstanceLock, releaseInstanceLock } from './single-instance.js';
+import { runPool } from './util/run-pool.js';
 
 /**
  * pi-discord-gateway - Lightweight Discord gateway for pi coding agent.
@@ -120,14 +121,18 @@ async function warmModelCatalogs(): Promise<void> {
       .filter(Boolean),
   ]);
 
-  await Promise.all(
-    [...workingDirectories].map(async (cwd) => {
+  // Each distinct cwd spawns a pi process (100-200 MB RSS): cap the startup
+  // spike instead of launching them all at once.
+  await runPool(
+    [...workingDirectories].map((cwd) => async () => {
       try {
         await refreshModelCatalogAsync(cwd);
         logger.info({ cwd }, 'Model catalog warmed');
       } catch (err: any) {
         logger.warn({ cwd, err: err?.message }, 'Failed to warm model catalog');
       }
+      return undefined;
     }),
+    2,
   );
 }

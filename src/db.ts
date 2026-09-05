@@ -104,6 +104,7 @@ export function initDb(): void {
   ensureTableColumn('channels', 'thinking_override', "text not null default ''");
   ensureTableColumn('channels', 'cwd_override', "text not null default ''");
   ensureTableColumn('message_queue', 'attachments', 'text');
+  ensureTableColumn('message_queue', 'attempts', 'integer not null default 0');
 
   logger.info({ path: config.dbPath }, 'Database initialized');
 }
@@ -263,10 +264,10 @@ export function claimNextMessage(channelJid: string): QueuedMessage | undefined 
       limit 1
     )
     update message_queue
-    set status = 'processing'
+    set status = 'processing', attempts = attempts + 1
     where rowid = (select rowid from next_message)
       and status = 'pending'
-    returning rowid, channel_jid, sender, sender_name, content, timestamp, status, attachments
+    returning rowid, channel_jid, sender, sender_name, content, timestamp, status, attachments, attempts
   `,
   ).get(channelJid) as QueuedMessage | undefined;
 
@@ -292,11 +293,21 @@ export function clearPendingMessages(channelJid: string): number {
   return result.changes;
 }
 
-export function recoverStuckMessages(): number {
-  const result = prep(
+export function recoverStuckMessages(maxAttempts: number): {
+  recovered: number;
+  abandoned: number;
+} {
+  // Order matters: rows over the attempt budget die first, the rest get a
+  // second life. A row over budget is one that repeatedly killed pi (e.g.
+  // OOM on a heavy prompt) — re-enqueuing it forever would wedge the gateway.
+  const abandoned = prep(
+    `update message_queue set status = 'failed', processed_at = datetime('now')
+     where status = 'processing' and attempts >= ?`,
+  ).run(maxAttempts).changes;
+  const recovered = prep(
     "update message_queue set status = 'pending' where status = 'processing'",
-  ).run();
-  return result.changes;
+  ).run().changes;
+  return { recovered, abandoned };
 }
 
 /** Get channels that have pending messages */

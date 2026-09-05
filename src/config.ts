@@ -182,6 +182,9 @@ export const config = {
    * instead of one per tick. */
   maxScheduledConcurrency: envInt('MAX_SCHEDULED_CONCURRENCY', 5, { min: 1 }),
 
+  /** Recovery attempts before a stuck message is abandoned as failed. */
+  maxMessageAttempts: envInt('MAX_MESSAGE_ATTEMPTS', 3, { min: 1 }),
+
   /** Poll interval for message queue (ms) */
   pollInterval: envInt('POLL_INTERVAL_MS', 1000, { min: 1 }),
 

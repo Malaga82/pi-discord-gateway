@@ -478,24 +478,33 @@ export function splitMessage(text: string, max: number): string[] {
   return chunks;
 }
 
-/** Send one chunk, retrying transient failures (429 / 5xx / network) once
- * after a short pause. Non-transient errors (400/403/…) fail fast: a retry
- * would just burn 1.5s and fail identically. allowedMentions parse:[] keeps
- * model-generated <@id>/<@&role>/@everyone from pinging anyone. */
+/** Send one chunk, retrying transient failures (429 / 5xx / network) with
+ * bounded exponential backoff. Non-transient errors (400/403/…) fail fast: a
+ * retry would just burn time and fail identically. allowedMentions parse:[]
+ * keeps model-generated <@id>/<@&role>/@everyone from pinging anyone. */
 export async function sendChunkWithRetry(
   textChannel: TextChannel | DMChannel,
   chunk: string,
 ): Promise<void> {
-  try {
-    await textChannel.send({ content: chunk, allowedMentions: { parse: [] } });
-  } catch (err: any) {
-    const status: unknown = err?.status;
-    const transient =
-      status === undefined || status === 429 || (typeof status === 'number' && status >= 500);
-    if (!transient) throw err;
-    logger.warn({ err: err?.message, status }, 'Chunk send failed once, retrying after pause');
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    await textChannel.send({ content: chunk, allowedMentions: { parse: [] } });
+  const DELAYS = [1_000, 3_000, 8_000];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await textChannel.send({ content: chunk, allowedMentions: { parse: [] } });
+      return;
+    } catch (err: any) {
+      const status: unknown = err?.status;
+      const transient =
+        status === undefined || status === 429 || (typeof status === 'number' && status >= 500);
+      if (!transient || attempt >= DELAYS.length) throw err;
+      const reported: unknown = err?.timeToReset ?? err?.retryAfter;
+      const wait = typeof reported === 'number' ? reported : DELAYS[attempt];
+      const jitter = Math.random() * 250; // parallel chunks must not retry in sync
+      logger.warn(
+        { err: err?.message, status, waitMs: wait + jitter, attempt },
+        'Chunk send failed, retrying',
+      );
+      await new Promise((resolve) => setTimeout(resolve, wait + jitter));
+    }
   }
 }
 
