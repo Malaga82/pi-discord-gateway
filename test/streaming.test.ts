@@ -317,6 +317,8 @@ describe('renderToolLine redaction', () => {
     const log = renderLog(state);
     expect(log).not.toContain('hunter2supersecretvalue');
     expect(log).toContain('[REDACTED]');
+    // Context after the secret survives (non-greedy value match).
+    expect(log).toContain('"region":"eu"');
   });
 
   it('renders the first STRING among command/path/query/url, never [object Object]', () => {

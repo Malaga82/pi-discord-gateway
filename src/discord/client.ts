@@ -448,15 +448,13 @@ export function splitMessage(text: string, max: number): string[] {
         fenceLines = chunk.match(/^```.*$/gm) ?? [];
         openFence = fenceLines[fenceLines.length - 1] ?? '```';
       }
-      // Reopening costs openFence.length+1 chars of the next iteration. If
-      // the fence dwarfs the remaining content (or nearly fills the cap),
-      // progress shrinks toward zero — up to an infinite loop. Leave the
-      // tail unfenced instead (degraded rendering beats a hung gateway).
-      if (
-        fenceLines.length % 2 === 1 &&
-        openFence.length + 1 < max - 4 &&
-        rest.length > openFence.length + 1
-      ) {
+      // Reopening costs openFence.length+1 chars of every subsequent
+      // iteration. A fence line comparable to the cap shrinks progress to a
+      // crawl (7 KB answer → thousands of 2 KB messages) or to zero (infinite
+      // loop, OOM). Require the fence to be well under half the cap so each
+      // pass consumes a useful chunk; otherwise leave the tail unfenced
+      // (degraded rendering beats a flooded channel or a hung gateway).
+      if (fenceLines.length % 2 === 1 && openFence.length + 1 < max / 2) {
         chunk = `${chunk}\n\u0060\u0060\u0060`;
         rest = `${openFence}\n${rest.replace(/^\n/, '')}`;
       }

@@ -188,7 +188,7 @@ function renderToolLine(toolCall: any): string {
   // keyword) stays visible — that's real secret-scanner territory.
   argPreview = argPreview
     .replace(
-      /(authorization|bearer|token|api[_-]?key|secret[_-]?access[_-]?key|password|passwd|secret)([\s:="']+)(bearer\s+|basic\s+)?\S+/gi,
+      /(authorization|bearer|token|api[_-]?key|secret[_-]?access[_-]?key|password|passwd|secret)([\s:="']+)(bearer\s+|basic\s+)?[^\s"}]+/gi,
       '$1$2[REDACTED]',
     )
     .replace(/(\/\/[^:/\s]+:)[^@\s]+@/g, '$1[REDACTED]@')

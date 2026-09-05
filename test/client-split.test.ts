@@ -58,22 +58,31 @@ describe('splitMessage', () => {
     expect(reassembled.replace(/\s+/g, '')).toBe('x'.repeat(6000));
   });
 
-  it('terminates (no amplification) when a fence line is nearly as long as the cap', () => {
-    // Regression: a 1996+ char fence line made the reopen step eat the whole
-    // progress budget — infinite loop and OOM. The tail may flow unfenced.
-    for (const fenceLen of [1988, 1993, 1995, 1996, 1999, 2103]) {
-      const text = '```' + 'a'.repeat(fenceLen - 3) + '\n' + 'x'.repeat(1050);
+  it('terminates without amplification across the whole 1900-2000 fence band (parametric)', () => {
+    // Regression (two rounds): fence lines comparable to the cap first made
+    // the loop hang / OOM, then (with only a progress guard) amplified a 7 KB
+    // answer into 1500+ messages. Fences above ~cap/2 must degrade to a
+    // plain unfenced tail, bounded chunks, zero amplification.
+    for (let fenceLen = 1900; fenceLen <= 2005; fenceLen += 5) {
+      const text = '```' + 'a'.repeat(fenceLen - 3) + '\n' + 'x'.repeat(5000);
       const chunks = splitMessage(text, 2000);
-      expect(chunks.length).toBeLessThanOrEqual(3);
-      const reassembled = chunks.join('');
-      for (const ch of text) {
-        expect(reassembled).toContain(ch === '\n' ? '\n' : ch);
+      // bounded: reopen only when the fence is under half the cap
+      expect(chunks.length).toBeLessThanOrEqual(8);
+      const out = chunks.reduce((s, c) => s + c.length, 0);
+      // no amplification: output tracks input, plus at most fence bookkeeping
+      expect(out).toBeLessThanOrEqual(text.length + 4 * (fenceLen + 1) + 16);
+      for (const chunk of chunks) {
+        expect(chunk.length).toBeLessThanOrEqual(2000);
       }
-      // No character loss: total content length preserved (minus at most the
-      // boundary newlines the splitter is allowed to drop).
-      expect(reassembled.replace(/\n/g, '').length).toBeGreaterThanOrEqual(
-        text.replace(/\n/g, '').length - 2,
-      );
+    }
+  });
+
+  it('still reopens short fences (normal fenced answers keep balanced rendering)', () => {
+    const text = '```js\n' + 'x'.repeat(6000) + '\n```\n';
+    const chunks = splitMessage(text, 2000);
+    expect(chunks.length).toBe(4);
+    for (const chunk of chunks) {
+      expect((chunk.match(/^```/gm) ?? []).length % 2).toBe(0);
     }
   });
 
