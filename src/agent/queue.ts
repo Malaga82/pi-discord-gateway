@@ -34,6 +34,8 @@ const activeChannels = new Set<string>();
 const activeTaskPromises = new Set<Promise<void>>();
 const activeTaskControllers = new Map<number, AbortController>();
 const activeChannelControllers = new Map<string, AbortController>();
+/** jid → rowid of the in-flight message (lets /pi stop kill it for good). */
+const activeChannelRowids = new Map<string, number>();
 
 let running = false;
 let pollTimer: NodeJS.Timeout | undefined;
@@ -48,6 +50,11 @@ export function abortChannelTask(jid: string): { aborted: boolean; cleared: numb
   const controller = activeChannelControllers.get(jid);
   const aborted = Boolean(controller);
   if (controller) {
+    // Voluntary stop: kill the row BEFORE the abort lands, so processMessage's
+    // shutdown-recovery contract (leave 'processing' for the next boot) does
+    // not resurrect a task the user explicitly asked to stop.
+    const rowid = activeChannelRowids.get(jid);
+    if (rowid !== undefined) markMessageFailed(rowid);
     controller.abort();
   }
   const cleared = clearPendingMessages(jid);
@@ -131,6 +138,7 @@ function dispatch(): void {
     activeChannels.add(jid);
     activeTaskControllers.set(msg.rowid, controller);
     activeChannelControllers.set(jid, controller);
+    activeChannelRowids.set(jid, msg.rowid);
 
     const taskPromise = processMessage(
       jid,
@@ -143,6 +151,7 @@ function dispatch(): void {
       activeChannels.delete(jid);
       activeTaskControllers.delete(msg.rowid);
       activeChannelControllers.delete(jid);
+      activeChannelRowids.delete(jid);
       activeTaskPromises.delete(taskPromise);
 
       if (running) {

@@ -35,7 +35,9 @@ export function acquireInstanceLock(lockPath: string): void {
     // fsync window). Defaulting to alive would brick the gateway until a
     // human deletes the file.
     let alive = false;
-    if (Number.isFinite(pid)) {
+    if (Number.isFinite(pid) && pid > 0) {
+      // pid > 0: exclude 0/-1, whose process.kill semantics are "every
+      // process / the process group" and would never throw.
       alive = true;
       try {
         process.kill(pid, 0);
