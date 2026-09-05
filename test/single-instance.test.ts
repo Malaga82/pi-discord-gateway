@@ -44,4 +44,18 @@ describe('instance lock', () => {
     expect(readFileSync(lockPath, 'utf8').trim()).toBe(String(process.pid));
     releaseInstanceLock(lockPath);
   });
+
+  it('takes over a zero-byte lock left by a crash mid-acquire', () => {
+    writeFileSync(lockPath, '');
+    expect(() => acquireInstanceLock(lockPath)).not.toThrow();
+    expect(readFileSync(lockPath, 'utf8')).toBe(String(process.pid));
+    releaseInstanceLock(lockPath);
+  });
+
+  it('takes over a lock whose contents are not a pid', () => {
+    writeFileSync(lockPath, 'garbage\n');
+    expect(() => acquireInstanceLock(lockPath)).not.toThrow();
+    expect(readFileSync(lockPath, 'utf8').trim()).toBe(String(process.pid));
+    releaseInstanceLock(lockPath);
+  });
 });
