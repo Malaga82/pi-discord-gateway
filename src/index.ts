@@ -22,9 +22,11 @@ export async function startGateway(): Promise<void> {
     );
   }
 
-  initDb();
+  // Lock before touching the DB: a second instance must not init/migrate
+  // anything before losing the race.
   const lockPath = `${config.dbPath}.lock`;
   acquireInstanceLock(lockPath);
+  initDb();
 
   let stopArchiveCleanup = () => {};
   let stopMediaCleanup = () => {};

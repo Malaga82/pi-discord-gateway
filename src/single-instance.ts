@@ -37,11 +37,16 @@ export function acquireInstanceLock(lockPath: string): void {
 
     if (alive) {
       throw new Error(
-        `Another gateway instance is already running (pid ${Number.isFinite(pid) ? pid : 'unknown'}, lock: ${lockPath}).`,
+        `Another gateway instance is already running (pid ${Number.isFinite(pid) ? pid : 'unknown'}, lock: ${lockPath}). ` +
+          `If that pid is stale or was reused by another process, remove the lock file and start again.`,
       );
     }
     logger.warn({ stalePid: pid, lockPath }, 'Removing stale instance lock');
-    unlinkSync(lockPath);
+    try {
+      unlinkSync(lockPath);
+    } catch (err: any) {
+      if (err?.code !== 'ENOENT') throw err; // gone already: another starter won the race
+    }
   }
   throw new Error(`Could not acquire instance lock: ${lockPath}`);
 }

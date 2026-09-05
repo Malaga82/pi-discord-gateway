@@ -253,9 +253,8 @@ export function enqueueMessage(msg: {
 }
 
 export function claimNextMessage(channelJid: string): QueuedMessage | undefined {
-  const row = db
-    .prepare(
-      `
+  const row = prep(
+    `
     with next_message as (
       select rowid
       from message_queue
@@ -269,8 +268,7 @@ export function claimNextMessage(channelJid: string): QueuedMessage | undefined 
       and status = 'pending'
     returning rowid, channel_jid, sender, sender_name, content, timestamp, status, attachments
   `,
-    )
-    .get(channelJid) as QueuedMessage | undefined;
+  ).get(channelJid) as QueuedMessage | undefined;
 
   return row;
 }
@@ -295,25 +293,23 @@ export function clearPendingMessages(channelJid: string): number {
 }
 
 export function recoverStuckMessages(): number {
-  const result = db
-    .prepare("update message_queue set status = 'pending' where status = 'processing'")
-    .run();
+  const result = prep(
+    "update message_queue set status = 'pending' where status = 'processing'",
+  ).run();
   return result.changes;
 }
 
 /** Get channels that have pending messages */
 export function channelsWithPending(): string[] {
-  const rows = db
-    .prepare(
-      `
+  const rows = prep(
+    `
     select channel_jid
     from message_queue
     where status = 'pending'
     group by channel_jid
     order by min(rowid) asc
   `,
-    )
-    .all() as any[];
+  ).all() as any[];
   return rows.map((r) => r.channel_jid);
 }
 
@@ -424,8 +420,10 @@ export function enqueueScheduledTask(
 
 /**
  * Purge processed queue rows and message-log entries older than the retention
- * window. Without this both tables grow forever and the per-second pending
- * group-by scans an ever-larger table. Reuses ARCHIVE_RETENTION_DAYS
+ * window. This is a disk/WAL reclaim, not a throughput fix: the per-second
+ * pending group-by stays flat regardless of table size (idx_queue_status
+ * covers it — measured 0.005 ms at 1M rows). Without the purge the tables
+ * just grow forever. Reuses ARCHIVE_RETENTION_DAYS
  * (0 = never clean, same semantics as archived sessions).
  */
 export function purgeOldMessages(retentionDays: number): { queue: number; log: number } {
