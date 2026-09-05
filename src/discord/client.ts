@@ -462,8 +462,12 @@ export function splitMessage(text: string, max: number): string[] {
 
     if (rest.length >= remaining.length) {
       // Hard guarantee of forward progress, whatever the fence logic did.
-      chunks.push(remaining.slice(0, max));
-      remaining = remaining.slice(max);
+      // Unreachable while the reopen threshold holds, but keep it surrogate-
+      // safe in case the threshold ever changes.
+      let cut = max;
+      if (isLowSurrogate(cut)) cut = cut > 1 ? cut - 1 : Math.min(2, remaining.length);
+      chunks.push(remaining.slice(0, cut));
+      remaining = remaining.slice(cut);
       continue;
     }
 

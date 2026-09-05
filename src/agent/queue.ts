@@ -296,7 +296,12 @@ async function processMessage(
       // tools that did run before the kill.
       markMessageFailed(rowid);
       if (stream) await finalizeStream(stream, undefined);
-      await sendResponse(jid, '⚠️ Agent invocation timed out — details in the gateway logs.');
+      // agentTimeoutMs is not sensitive: naming the limit helps the user
+      // raise it via env instead of staring at "details in the logs".
+      await sendResponse(
+        jid,
+        `⚠️ Agent invocation timed out (limit ${Math.round(config.agentTimeoutMs / 1000)}s) — details in the gateway logs.`,
+      );
       logger.warn({ jid, rowid, error: result.error }, 'Agent invocation timed out');
       return;
     }
