@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        node-version: [20, 22]
+        node-version: [22]
         include:
           # Windows parity watchdog: the code has win32-specific branches (.cmd
           # shim resolution, kill semantics, SIGBREAK, APPDATA paths) but the
