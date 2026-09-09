@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 import * as clack from '@clack/prompts';
 import { listAvailableModels } from '../agent/model-catalog.js';
 import { defaultDataDir, resolveConfigPath } from '../config.js';
+import { MIN_NODE_VERSION, nodeVersionMeetsFloor } from '../util/node-floor.js';
 
 const SERVICE_NAME = 'pi-discord-gateway';
 const DEFAULT_TRIGGER_NAME = 'pi';
@@ -30,6 +31,9 @@ export async function runSetup(args: string[]): Promise<void> {
   // ── Prerequisites ──
   const prereqs = checkPrerequisites();
   const prereqLines = [
+    prereqs.nodeOk
+      ? `  ✓ Node.js: v${process.versions.node}`
+      : `  ✗ Node.js: v${process.versions.node} — requires ≥ ${MIN_NODE_VERSION} (imposed by the pi peer packages)`,
     prereqs.piPath
       ? `  ✓ pi binary: ${prereqs.piPath}${prereqs.piVersion ? ` (${prereqs.piVersion})` : ''}`
       : '  ✗ pi binary: not found in PATH — install pi first',
@@ -40,9 +44,11 @@ export async function runSetup(args: string[]): Promise<void> {
   ];
   clack.note(prereqLines.join('\n'), 'Prerequisites');
 
-  if (!prereqs.piPath || !prereqs.authFound) {
+  if (!prereqs.nodeOk || !prereqs.piPath || !prereqs.authFound) {
     clack.log.warn(
-      'Some prerequisites are missing. The gateway needs pi installed and logged in to work.',
+      'Some prerequisites are missing. The gateway needs Node ≥ ' +
+        MIN_NODE_VERSION +
+        ' and pi installed and logged in to work.',
     );
   }
 
@@ -196,11 +202,13 @@ export async function runSetup(args: string[]): Promise<void> {
 }
 
 function checkPrerequisites(): {
+  nodeOk: boolean;
   piPath: string | undefined;
   piVersion: string | undefined;
   authFound: boolean;
   modelCount: number | undefined;
 } {
+  const nodeOk = nodeVersionMeetsFloor();
   const piPath = findExecutable('pi');
   const piVersion = piPath ? readCommandOutput('pi --version') : undefined;
   const authFound = existsSync(AUTH_PATH);
@@ -212,7 +220,7 @@ function checkPrerequisites(): {
     modelCount = undefined;
   }
 
-  return { piPath, piVersion, authFound, modelCount };
+  return { nodeOk, piPath, piVersion, authFound, modelCount };
 }
 
 function findExecutable(name: string): string | undefined {

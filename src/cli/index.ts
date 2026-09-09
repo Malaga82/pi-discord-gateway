@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { RegisteredChannel } from '../types.js';
 import { config, resolveConfigPath } from '../config.js';
+import { MIN_NODE_VERSION, nodeVersionMeetsFloor } from '../util/node-floor.js';
 
 type DbModule = typeof import('../db.js');
 
@@ -438,6 +439,13 @@ async function reportError(command: string | undefined, err: unknown): Promise<v
 }
 
 function checkPiDependencies(): void {
+  if (!nodeVersionMeetsFloor()) {
+    throw new Error(
+      `Node.js >= ${MIN_NODE_VERSION} is required (imposed by the pi peer packages); ` +
+        `current version is ${process.versions.node}.`,
+    );
+  }
+
   if (canResolveImport('@earendil-works/pi-ai')) {
     return;
   }
