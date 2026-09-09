@@ -14,7 +14,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - `piscord start` error reporting no longer depends on pi being loadable: `reportError` falls back to plain stderr when its own dynamic imports (discord/client → slash-commands → model-catalog) fail, so the real diagnostic is never replaced by a bare module link error.
-- `piscord setup` prerequisite checklist: model count now forces a real catalog refresh (a cold cache always reported `0 available`) and zero renders as ✗, not ✓.
+- `piscord setup` prerequisite checklist: model count now forces a real catalog refresh under a spinner (a cold cache always reported `0 available`, and the sync `pi --list-models` could block for seconds); zero models renders as ✗ "none available", a failed catalog call as ✗ "unavailable".
 - README/CONTRIBUTING still said "Node >= 20"; aligned to 22.19.
 
 ## [1.8.4] - 2026-08-31
