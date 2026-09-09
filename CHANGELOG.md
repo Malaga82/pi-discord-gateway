@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.5] - unreleased
+
+### Changed
+
+- `engines.node` raised from `>=20.3` to `>=22.19.0`: the floor is imposed by the pi peer packages (`@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` both require Node >= 22.19); no gateway API needs 22 specifically.
+- `piscord setup` and `piscord start` now fail fast with an explicit Node message — `engines` alone is documentation, npm does not enforce it unless `engine-strict` is set.
+- pi peer dependencies bounded to `>=0.84.4 <2` (was `*`), plus a test asserting the three `pi-coding-agent` exports the gateway statically links: an upstream rename now breaks CI instead of production boot.
+- CI matrix runs the declared floor (22.19.0) and Node 24, instead of only the latest 22.x.
+
+### Fixed
+
+- README/CONTRIBUTING still said "Node >= 20"; aligned to 22.19.
+
 ## [1.8.4] - 2026-08-31
 
 ### Security

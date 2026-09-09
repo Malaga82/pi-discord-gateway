@@ -24,7 +24,7 @@ That's it. The setup wizard checks prerequisites, asks for your Discord bot toke
 
 ## Prerequisites
 
-- **Node.js** ≥ 20
+- **Node.js** ≥ 22.19 (floor imposed by the pi peer packages, not by gateway code)
 - **Linux, macOS, or Windows**
 - **[pi](https://github.com/badlogic/pi-mono)** ≥ 0.74.0 installed and on `PATH`, with login completed (`~/.pi/agent/auth.json`)
 - **Discord bot token** — [create one here](https://discord.com/developers/applications)
