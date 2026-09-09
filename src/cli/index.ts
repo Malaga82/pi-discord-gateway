@@ -12,6 +12,16 @@ type DbModule = typeof import('../db.js');
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   const [command, ...args] = argv;
 
+  // Before any command links pi: the static import graph of this entry is
+  // node:* + config.js only, so the guard speaks even when the peer is
+  // unloadable or the setup wizard would die at import time.
+  if (!nodeVersionMeetsFloor()) {
+    throw new Error(
+      `Node.js >= ${MIN_NODE_VERSION} is required (imposed by the pi peer packages); ` +
+        `current version is ${process.versions.node}.`,
+    );
+  }
+
   switch (command) {
     case undefined:
       printHelp();
@@ -423,15 +433,22 @@ async function reportError(command: string | undefined, err: unknown): Promise<v
   const message = errorMessage(err);
 
   if (command === 'start') {
-    const [{ closeDb }, { stopDiscord }, { logger }] = await Promise.all([
-      import('../db.js'),
-      import('../discord/client.js'),
-      import('../logger.js'),
-    ]);
+    try {
+      const [{ closeDb }, { stopDiscord }, { logger }] = await Promise.all([
+        import('../db.js'),
+        import('../discord/client.js'),
+        import('../logger.js'),
+      ]);
 
-    logger.fatal({ err: message }, 'Gateway exited with error');
-    stopDiscord();
-    closeDb();
+      logger.fatal({ err: message }, 'Gateway exited with error');
+      stopDiscord();
+      closeDb();
+    } catch {
+      // The reporter itself links pi (discord/client → slash-commands →
+      // model-catalog). If the peer is unloadable, report on plain stderr:
+      // losing the diagnostic to a bare link error is the worse failure.
+      console.error(`Gateway exited with error: ${message}`);
+    }
     return;
   }
 
@@ -439,13 +456,6 @@ async function reportError(command: string | undefined, err: unknown): Promise<v
 }
 
 function checkPiDependencies(): void {
-  if (!nodeVersionMeetsFloor()) {
-    throw new Error(
-      `Node.js >= ${MIN_NODE_VERSION} is required (imposed by the pi peer packages); ` +
-        `current version is ${process.versions.node}.`,
-    );
-  }
-
   if (canResolveImport('@earendil-works/pi-ai')) {
     return;
   }

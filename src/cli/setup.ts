@@ -38,9 +38,9 @@ export async function runSetup(args: string[]): Promise<void> {
       ? `  ✓ pi binary: ${prereqs.piPath}${prereqs.piVersion ? ` (${prereqs.piVersion})` : ''}`
       : '  ✗ pi binary: not found in PATH — install pi first',
     prereqs.authFound ? `  ✓ pi auth: found` : `  ✗ pi auth: missing — run "pi" and log in first`,
-    prereqs.modelCount !== undefined
+    prereqs.modelCount
       ? `  ✓ models: ${prereqs.modelCount} available`
-      : `  ✗ models: unavailable`,
+      : `  ✗ models: none available`,
   ];
   clack.note(prereqLines.join('\n'), 'Prerequisites');
 
@@ -215,7 +215,7 @@ function checkPrerequisites(): {
   let modelCount: number | undefined;
 
   try {
-    modelCount = listAvailableModels().length;
+    modelCount = listAvailableModels({ forceRefresh: true }).length;
   } catch {
     modelCount = undefined;
   }
