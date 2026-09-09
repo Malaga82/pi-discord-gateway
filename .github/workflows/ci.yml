@@ -14,7 +14,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        node-version: [22]
+        # 22.19.0 = the declared engines floor (never tested by "latest 22");
+        # 24 = the line the gateway is actually deployed on
+        node-version: [22.19.0, 24]
         include:
           # Windows parity watchdog: the code has win32-specific branches (.cmd
           # shim resolution, kill semantics, SIGBREAK, APPDATA paths) but the
