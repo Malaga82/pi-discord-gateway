@@ -30,10 +30,10 @@ export async function runSetup(args: string[]): Promise<void> {
   // ── Prerequisites ──
   // Node floor is enforced at main() entry, before this module is ever
   // imported — the ✓ row below is a guaranteed truth, not a live check.
-  const spinner = clack.spinner();
-  spinner.start('Checking prerequisites (pi --version, model catalog)…');
+  // Sync log, not a spinner: checkPrerequisites() blocks the event loop with
+  // spawnSync calls, so a clack.spinner() interval would never fire.
+  clack.log.info('Checking prerequisites (pi --version, model catalog)…');
   const prereqs = checkPrerequisites();
-  spinner.stop('Prerequisites checked');
   const prereqLines = [
     `  ✓ Node.js: v${process.versions.node}`,
     prereqs.piPath
