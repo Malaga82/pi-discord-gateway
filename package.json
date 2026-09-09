@@ -1,6 +1,6 @@
 {
   "name": "piscord",
-  "version": "1.8.4",
+  "version": "1.8.5",
   "description": "Lightweight Discord gateway for pi coding agent",
   "license": "MIT",
   "repository": {
@@ -45,8 +45,8 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-ai": ">=0.84.4 <2",
+    "@earendil-works/pi-coding-agent": ">=0.84.4 <2"
   },
   "dependencies": {
     "@clack/prompts": "^0.11.0",
