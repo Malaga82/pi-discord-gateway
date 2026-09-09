@@ -9,11 +9,12 @@ All notable changes to this project will be documented in this file.
 - `engines.node` raised from `>=20.3` to `>=22.19.0`: the floor is imposed by the pi peer packages (`@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` both require Node >= 22.19); no gateway API needs 22 specifically.
 - every `piscord` command now fails fast with an explicit Node message at the top of `main()`, before any dynamic import links pi — `engines` alone is documentation, npm does not enforce it unless `engine-strict` is set.
 - pi peer dependencies bounded to `>=0.84.4 <2` (was `*`), plus a test asserting the three `pi-coding-agent` exports the gateway statically links: an upstream rename now breaks CI instead of production boot. Dev pin and lockfile on 0.85.1 — the version actually deployed — so the canary asserts what runs, not a stale family.
-- CI matrix runs the declared floor (22.19.0) and Node 24 on ubuntu, and pins the Windows parity job to the floor too, instead of only the latest 22.x.
+- CI matrix runs the declared floor (22.19.0) and Node 24 on ubuntu, and pins the Windows parity job to the floor too, instead of only the latest 22.x. A `npm audit --omit=dev` step now gates runtime dependencies (dev-tree advisories do not reach consumers and stay non-blocking).
 
 ### Fixed
 
 - `piscord start` error reporting no longer depends on pi being loadable: `reportError` falls back to plain stderr when its own dynamic imports (discord/client → slash-commands → model-catalog) fail, so the real diagnostic is never replaced by a bare module link error.
+- `piscord setup` daemon install: the last `clack.spinner()` replaced with synchronous log lines — `runDaemon()` blocks the event loop with `execSync`/`spawnSync` (the spinner's first frame never drew) and its `stdio: 'inherit'` systemctl output would corrupt the redrawn line anyway.
 - `piscord setup` prerequisite checklist: model count now forces a real catalog refresh behind a sync log line (a cold cache always reported `0 available`, the sync `pi --list-models` blocks the event loop so a spinner frame would never draw); zero models renders as ✗ "none available", a failed catalog call as ✗ "unavailable".
 - README/CONTRIBUTING still said "Node >= 20"; aligned to 22.19.
 

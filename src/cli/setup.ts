@@ -172,17 +172,18 @@ export async function runSetup(args: string[]): Promise<void> {
     }
 
     if (installDaemon) {
-      const s = clack.spinner();
-      s.start(`Installing ${serviceName} service...`);
+      // Sync log lines, not a spinner: runDaemon() blocks the event loop with
+      // execSync/spawnSync (first frame needs ~80ms of idle loop), and its
+      // stdio: 'inherit' systemctl output would overwrite spinner frames.
+      clack.log.info(`Installing ${serviceName} service...`);
       try {
         const { runDaemon } = await import('./daemon.js');
         runDaemon('install');
-        s.message('Starting service...');
+        clack.log.info('Starting service...');
         runDaemon('start');
-        s.stop('Service installed and started.');
+        clack.log.success('Service installed and started.');
         clack.log.success(`${SERVICE_NAME} is active`);
       } catch (err) {
-        s.stop('Service installation failed.');
         clack.log.error(errorMessage(err));
         clack.log.info(
           'You can install manually later: piscord daemon install && piscord daemon start',
