@@ -116,4 +116,3 @@ function findExecutable(name: string): string | undefined {
   const cmd = process.platform === 'win32' ? 'where' : 'which';
   return readCommandOutput(`${cmd} ${name}`);
 }
-

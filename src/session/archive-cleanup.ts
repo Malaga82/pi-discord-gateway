@@ -2,6 +2,7 @@ import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { config } from '../config.js';
 import { purgeOldMessages } from '../db.js';
+import { hasActiveTasks } from '../agent/queue.js';
 import { logger } from '../logger.js';
 
 const ARCHIVE_TIMESTAMP_RE = /__archived_(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/;
@@ -109,7 +110,14 @@ export function startArchiveCleanup(): () => void {
   const runOnce = async () => {
     try {
       await cleanupArchivedSessions(config.sessionsDir, config.archiveRetentionDays);
-      await purgeOldMessages(config.archiveRetentionDays);
+      // Defer the purge while messages are in flight: its transaction stays
+      // open across the batch yields, so concurrent enqueues would be swept
+      // into it and lost on a mid-purge rollback.
+      if (hasActiveTasks()) {
+        logger.info('Skipping purge: messages are being processed');
+      } else {
+        await purgeOldMessages(config.archiveRetentionDays);
+      }
     } catch (err: any) {
       logger.warn({ err: err.message }, 'Archive cleanup error');
     }
