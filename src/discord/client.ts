@@ -110,10 +110,7 @@ async function handleMessage(message: Message): Promise<void> {
   // Hermes-agent DISCORD_ALLOW_BOTS=mentions). All other bot messages are ignored as upstream.
   if (message.author.bot) {
     const peerAllowed =
-      config.allowBotPeers.includes(message.author.id) &&
-      (message.mentions.users.has(botId) ||
-        message.content.includes(`<@${botId}>`) ||
-        message.content.includes(`<@!${botId}>`));
+      config.allowBotPeers.includes(message.author.id) && message.mentions.users.has(botId);
     if (!peerAllowed) return;
     // Loop guard: sliding window per (peer, channel). Dropped messages are NOT
     // recorded — otherwise a peer retrying after a legitimate loop end would
@@ -160,10 +157,11 @@ async function handleMessage(message: Message): Promise<void> {
 
   // Translate @bot mentions → trigger format
   if (client?.user) {
-    const isMentioned =
-      message.mentions.users.has(botId) ||
-      content.includes(`<@${botId}>`) ||
-      content.includes(`<@!${botId}>`);
+    // Discord does not parse mentions inside code blocks/inline code, so
+    // mentions.users is authoritative. The content.includes() checks that used
+    // to sit here made ANY echoed mention string — a fenced `echo <@bot>`, a
+    // quoted log line, a peer relaying text — act as a real trigger.
+    const isMentioned = message.mentions.users.has(botId);
 
     if (isMentioned) {
       content = content.replace(new RegExp(`<@!?${botId}>`, 'g'), '').trim();

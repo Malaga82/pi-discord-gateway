@@ -93,7 +93,7 @@ export async function runSetup(args: string[]): Promise<void> {
   }
 
   // ── Channel policy ──
-  let channelPolicy: 'open' | 'open-trigger' | 'allowlist' = 'open';
+  let channelPolicy: 'open' | 'open-trigger' | 'allowlist' = 'allowlist';
   if (interactive) {
     const result = await clack.select({
       message: 'Channel Policy — how should the bot handle server channels?',
@@ -114,7 +114,7 @@ export async function runSetup(args: string[]): Promise<void> {
           hint: 'Only respond in manually registered channels (piscord register ...)',
         },
       ],
-      initialValue: 'open' as const,
+      initialValue: 'allowlist' as const,
     });
     if (clack.isCancel(result)) {
       clack.cancel('Setup cancelled.');
@@ -261,7 +261,7 @@ export function buildConfigFile(options: {
     'POLL_INTERVAL_MS=1000',
     'SHUTDOWN_TIMEOUT_MS=15000',
     'AUTO_REGISTER_DMS=true',
-    `CHANNEL_POLICY=${options.channelPolicy ?? 'open'}`,
+    `CHANNEL_POLICY=${options.channelPolicy ?? 'allowlist'}`,
     'EXCLUDED_CHANNELS=',
     'MAX_ATTACHMENT_BYTES=26214400',
     'MAX_TOTAL_ATTACHMENT_BYTES=52428800',

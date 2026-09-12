@@ -213,7 +213,13 @@ export async function invokeAgent(
       // proves pi honored --mode json; after that the buffer is dead weight.
       if (!sawJson) chunks.push(c);
     });
-    proc.stderr.on('data', (c: Buffer) => errChunks.push(c));
+    // Cap stderr retention: consumers slice the last 600 chars anyway.
+    let errBytes = 0;
+    proc.stderr.on('data', (c: Buffer) => {
+      if (errBytes >= 64 * 1024) return;
+      errChunks.push(c);
+      errBytes += c.length;
+    });
 
     // Abort support
     let escalationTimer: NodeJS.Timeout | undefined;
@@ -580,7 +586,12 @@ async function getSessionStatsViaRpc(
     });
 
     proc.stdout.on('data', (chunk: Buffer) => reader.push(chunk));
-    proc.stderr.on('data', (chunk: Buffer) => errChunks.push(chunk));
+    let errBytes = 0;
+    proc.stderr.on('data', (chunk: Buffer) => {
+      if (errBytes >= 64 * 1024) return;
+      errChunks.push(chunk);
+      errBytes += chunk.length;
+    });
     proc.on('error', (err) => finish(err));
     proc.on('close', (code) => {
       reader.end();

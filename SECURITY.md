@@ -8,7 +8,9 @@ Security updates are provided for the latest released version of pi-discord-gate
 
 Please do **not** report security vulnerabilities through public GitHub issues.
 
-To report a vulnerability, email colin@aibuild.com with:
+Use **GitHub private vulnerability reporting** on this repository
+(**Settings → Code security → Private vulnerability reporting**, or the
+"Report a vulnerability" button on the Security tab) with:
 
 - A description of the issue and its potential impact
 - Steps to reproduce or proof-of-concept details, if available

@@ -200,8 +200,10 @@ export const config = {
   /** Extra pi flags (space-separated) */
   piExtraFlags: env('PI_EXTRA_FLAGS'),
 
-  /** Auto-register DM channels */
-  autoRegisterDMs: envBool('AUTO_REGISTER_DMS', true),
+  /** Auto-register DM channels. Default false: a DM bypasses the channel
+   * policy entirely (no allowlist applies) — enabling it is an explicit
+   * decision to serve any user who can reach the bot. */
+  autoRegisterDMs: envBool('AUTO_REGISTER_DMS', false),
 
   /** Channel access policy: open, open-trigger, or allowlist */
   channelPolicy: parseChannelPolicy(env('CHANNEL_POLICY', 'allowlist')),

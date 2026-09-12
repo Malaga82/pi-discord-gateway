@@ -26,7 +26,7 @@ That's it. The setup wizard checks prerequisites, asks for your Discord bot toke
 
 - **Node.js** ≥ 22.19 (floor imposed by the pi peer packages, not by gateway code)
 - **Linux, macOS, or Windows**
-- **[pi](https://github.com/badlogic/pi-mono)** ≥ 0.74.0 installed and on `PATH`, with login completed (`~/.pi/agent/auth.json`)
+- **[pi](https://github.com/badlogic/pi-mono)** ≥ 0.84.4 installed and on `PATH`, with login completed (`~/.pi/agent/auth.json`)
 - **Discord bot token** — [create one here](https://discord.com/developers/applications)
   - Enable **Message Content Intent** under Privileged Gateway Intents
   - Bot permissions: `Send Messages`, `Read Message History`, `View Channels`, `Attach Files`
@@ -208,13 +208,13 @@ Most users won't need to edit this file directly — `piscord setup` generates i
 | `PI_CWD`                     | `$HOME`                         | Default working directory for pi; can be overridden per registered channel                                                       |
 | `PI_EXTRA_FLAGS`             | _(none)_                        | Extra flags passed to pi                                                                                                         |
 | `TRIGGER_NAME`               | `pi`                            | Bot trigger name for @mentions                                                                                                   |
-| `CHANNEL_POLICY`             | `open`                          | Channel access: `open`, `open-trigger`, or `allowlist`                                                                           |
+| `CHANNEL_POLICY`             | `allowlist`                     | Channel access: `open`, `open-trigger`, or `allowlist`                                                                           |
 | `EXCLUDED_CHANNELS`          | _(none)_                        | Comma-separated channel IDs to exclude from auto-registration                                                                    |
 | `MAX_CONCURRENCY`            | `3`                             | Max parallel pi invocations                                                                                                      |
 | `MAX_SCHEDULED_CONCURRENCY`  | `5`                             | Max scheduled tasks enqueued per tick (execution is still serialized by `MAX_CONCURRENCY`)                                       |
 | `POLL_INTERVAL_MS`           | `1000`                          | Queue poll interval (ms)                                                                                                         |
 | `SHUTDOWN_TIMEOUT_MS`        | `15000`                         | Graceful shutdown timeout (ms)                                                                                                   |
-| `AUTO_REGISTER_DMS`          | `true`                          | Auto-register DM channels                                                                                                        |
+| `AUTO_REGISTER_DMS`          | `false`                         | Auto-register DM channels — `false`: DMs are ignored unless explicitly enabled (they bypass the channel policy)                  |
 | `ARCHIVE_RETENTION_DAYS`     | `30`                            | Days to keep archived sessions (0 = never clean)                                                                                 |
 | `MAX_ATTACHMENT_BYTES`       | `26214400`                      | Max size per attachment (0 = no limit)                                                                                           |
 | `MAX_TOTAL_ATTACHMENT_BYTES` | `52428800`                      | Max combined attachment size (0 = no limit)                                                                                      |

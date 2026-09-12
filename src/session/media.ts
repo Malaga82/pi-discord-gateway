@@ -6,8 +6,8 @@
  * Periodic cleanup removes stale media files.
  */
 
-import { createWriteStream, mkdirSync, readdirSync, rmSync, statSync, type Dirent } from 'node:fs';
-import { rm, stat } from 'node:fs/promises';
+import { createWriteStream, mkdirSync, type Dirent } from 'node:fs';
+import { readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -19,6 +19,10 @@ import { runPool } from '../util/run-pool.js';
 
 /** Discord allows 10 attachments per message; 4 keeps a small board clear. */
 const ATTACHMENT_CONCURRENCY = 4;
+
+/** Attachment bytes come from Discord's CDN only — never follow a redirect to
+ * a third-party host, and refuse URLs pointing elsewhere outright. */
+const ALLOWED_ATTACHMENT_HOSTS = new Set(['cdn.discordapp.com', 'media.discordapp.net']);
 
 /** A successfully downloaded file */
 export interface DownloadedFile {
@@ -115,7 +119,13 @@ async function streamAttachmentToFile(
     : stallController.signal;
 
   try {
-    const res = await fetch(attachment.url, { signal });
+    const host = new URL(attachment.url).hostname;
+    if (!ALLOWED_ATTACHMENT_HOSTS.has(host)) {
+      throw new Error(`attachment host ${host} is not an allowed CDN`);
+    }
+
+    // redirect: 'error' — a CDN URL must not bounce us to arbitrary hosts.
+    const res = await fetch(attachment.url, { signal, redirect: 'error' });
 
     if (!res.ok) {
       throw new Error(`Attachment download failed with status ${res.status}`);
@@ -129,9 +139,20 @@ async function streamAttachmentToFile(
     // Progress watchdog as a transform stage: attaching a 'data' listener
     // would flip the stream to flowing mode before pipeline attaches, which
     // only works by accident when pipeline runs in the same tick.
+    // Also the enforcement point of MAX_ATTACHMENT_BYTES: the config value
+    // already existed — counting bytes here is what makes it real. 0 = off.
+    const cap = config.maxAttachmentBytes;
+    let total = 0;
     const progress = new Transform({
       transform(chunk: Buffer, _enc, callback) {
         armStall();
+        if (cap > 0) {
+          total += chunk.length;
+          if (total > cap) {
+            callback(new Error(`attachment exceeds MAX_ATTACHMENT_BYTES (${cap} bytes)`));
+            return;
+          }
+        }
         callback(null, chunk);
       },
     });
@@ -146,11 +167,9 @@ export function startMediaCleanup(): () => void {
   // Run every 30 minutes
   const timer = setInterval(
     () => {
-      try {
-        cleanupExpiredMedia();
-      } catch (err: any) {
+      cleanupExpiredMedia().catch((err: any) => {
         logger.warn({ err: err.message }, 'Media cleanup error');
-      }
+      });
     },
     30 * 60 * 1000,
   );
@@ -159,7 +178,7 @@ export function startMediaCleanup(): () => void {
 }
 
 /** Remove media directories older than MEDIA_TTL_MS */
-function cleanupExpiredMedia(): void {
+async function cleanupExpiredMedia(): Promise<void> {
   const now = Date.now();
   const ttlMs = mediaTtlMs();
   let cleaned = 0;
@@ -168,25 +187,26 @@ function cleanupExpiredMedia(): void {
   // ponytail: the unbounded walk of the whole sessionsDir was linear in the
   // entire history; if channel layouts ever get deeper, iterate the
   // registered channel folders from the DB instead.
-  for (const mediaRoot of findMediaRoots(config.sessionsDir, 3)) {
+  for (const mediaRoot of await findMediaRoots(config.sessionsDir, 3)) {
+    let msgDirs;
     try {
-      const msgDirs = readdirSync(mediaRoot, { withFileTypes: true });
-      for (const msgDir of msgDirs) {
-        if (!msgDir.isDirectory() || !msgDir.name.startsWith('msg-')) continue;
-
-        const dirPath = join(mediaRoot, msgDir.name);
-        try {
-          const st = statSync(dirPath);
-          if (now - st.mtimeMs > ttlMs) {
-            rmSync(dirPath, { recursive: true, force: true });
-            cleaned++;
-          }
-        } catch {
-          // Skip entries that disappear mid-scan.
-        }
-      }
+      msgDirs = await readdir(mediaRoot, { withFileTypes: true });
     } catch {
-      // Media root vanished mid-scan.
+      continue; // Media root vanished mid-scan.
+    }
+    for (const msgDir of msgDirs) {
+      if (!msgDir.isDirectory() || !msgDir.name.startsWith('msg-')) continue;
+
+      const dirPath = join(mediaRoot, msgDir.name);
+      try {
+        const st = await stat(dirPath);
+        if (now - st.mtimeMs > ttlMs) {
+          await rm(dirPath, { recursive: true, force: true });
+          cleaned++;
+        }
+      } catch {
+        // Skip entries that disappear mid-scan.
+      }
     }
   }
 
@@ -195,12 +215,12 @@ function cleanupExpiredMedia(): void {
   }
 }
 
-function findMediaRoots(dirPath: string, maxDepth = 3): string[] {
+async function findMediaRoots(dirPath: string, maxDepth = 3): Promise<string[]> {
   if (maxDepth <= 0) return [];
   let entries: Dirent[];
 
   try {
-    entries = readdirSync(dirPath, { withFileTypes: true });
+    entries = await readdir(dirPath, { withFileTypes: true });
   } catch {
     return [];
   }
@@ -216,7 +236,7 @@ function findMediaRoots(dirPath: string, maxDepth = 3): string[] {
       continue;
     }
 
-    mediaRoots.push(...findMediaRoots(entryPath, maxDepth - 1));
+    mediaRoots.push(...(await findMediaRoots(entryPath, maxDepth - 1)));
   }
 
   return mediaRoots;

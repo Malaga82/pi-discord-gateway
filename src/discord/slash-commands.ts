@@ -265,7 +265,9 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
 
   const effective = computeEffectiveChannelSettings(channel);
   const sessionStatus = await getChannelSessionStatus(channel.folder, effective.effectiveCwd);
-  await interaction.editReply({ content: buildStatusMessage(effective, sessionStatus) });
+  await interaction.editReply({
+    content: buildStatusMessage(effective, sessionStatus, { isDm: !interaction.inGuild() }),
+  });
 }
 
 async function handleModelSet(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -409,15 +411,21 @@ function notRegisteredMessage(): string {
   return 'This channel is not registered yet. Send a regular message in this channel first — the gateway will auto-register it (if channel policy is `open` or `open-trigger`).';
 }
 
-function buildStatusMessage(
+export function buildStatusMessage(
   effective: EffectiveChannelSettings,
   sessionStatus: ChannelSessionStatus,
+  opts: { isDm?: boolean } = {},
 ): string {
   const rows: Array<[string, string]> = [
     ['Model', formatModelValue(effective)],
     ['Thinking', formatThinkingValue(effective)],
-    ['Working dir', formatWorkingDirValue(effective)],
   ];
+
+  // Working dir is a host path: meaningful in the guild it serves, a leak in
+  // a DM where the user has no relationship with the machine.
+  if (!opts.isDm) {
+    rows.push(['Working dir', formatWorkingDirValue(effective)]);
+  }
 
   if (effective.thinkingAdjusted) {
     rows.push(['Fallback', formatThinkingFallback(effective)]);

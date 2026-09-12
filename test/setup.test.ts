@@ -16,5 +16,7 @@ describe('buildConfigFile', () => {
     expect(text).toContain('PI_CWD=/workspace/project');
     expect(text).toContain('SESSIONS_DIR=/var/lib/pi-discord/sessions');
     expect(text).toContain('DB_PATH=/var/lib/pi-discord/gateway.db');
+    // Safe default even when the caller omits the policy.
+    expect(text).toContain('CHANNEL_POLICY=allowlist');
   });
 });

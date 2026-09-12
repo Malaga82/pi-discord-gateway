@@ -69,7 +69,7 @@ describe('downloadAttachments concurrency', () => {
 
     let active = 0;
     let peak = 0;
-    const failingUrl = 'https://cdn.example/broken.png';
+    const failingUrl = 'https://cdn.discordapp.com/broken.png';
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) => {
@@ -98,11 +98,31 @@ describe('downloadAttachments concurrency', () => {
     const media = await import('../src/session/media.js');
 
     const atts = [
-      { url: 'https://cdn.example/a.txt', name: 'a.txt', contentType: 'text/plain', size: 5 },
+      {
+        url: 'https://cdn.discordapp.com/a.txt',
+        name: 'a.txt',
+        contentType: 'text/plain',
+        size: 5,
+      },
       { url: failingUrl, name: 'broken.png', contentType: 'image/png', size: 5 },
-      { url: 'https://cdn.example/b.txt', name: 'b.txt', contentType: 'text/plain', size: 5 },
-      { url: 'https://cdn.example/c.txt', name: 'c.txt', contentType: 'text/plain', size: 5 },
-      { url: 'https://cdn.example/d.txt', name: 'd.txt', contentType: 'text/plain', size: 5 },
+      {
+        url: 'https://cdn.discordapp.com/b.txt',
+        name: 'b.txt',
+        contentType: 'text/plain',
+        size: 5,
+      },
+      {
+        url: 'https://cdn.discordapp.com/c.txt',
+        name: 'c.txt',
+        contentType: 'text/plain',
+        size: 5,
+      },
+      {
+        url: 'https://cdn.discordapp.com/d.txt',
+        name: 'd.txt',
+        contentType: 'text/plain',
+        size: 5,
+      },
     ];
 
     const files = await media.downloadAttachments(atts, 'ch_test', 'msg1');
@@ -115,5 +135,49 @@ describe('downloadAttachments concurrency', () => {
       expect(existsSync(f.filePath)).toBe(true);
       expect(f.size).toBe(5);
     }
+  });
+
+  it('enforces MAX_ATTACHMENT_BYTES mid-stream and removes the partial file', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'pidg-media-cap-'));
+    tempDirs.push(tempDir);
+    process.env.DB_PATH = ':memory:';
+    process.env.SESSIONS_DIR = resolve(tempDir, 'sessions');
+    process.env.PI_CWD = '/global/project';
+    process.env.MAX_ATTACHMENT_BYTES = '10';
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const chunk = new TextEncoder().encode('x'.repeat(100));
+        return {
+          ok: true,
+          status: 200,
+          body: new ReadableStream({
+            start(c) {
+              c.enqueue(chunk);
+              c.close();
+            },
+          }),
+        };
+      }),
+    );
+
+    vi.resetModules();
+    const media = await import('../src/session/media.js');
+
+    const files = await media.downloadAttachments(
+      [
+        {
+          url: 'https://cdn.discordapp.com/big.bin',
+          name: 'big.bin',
+          contentType: 'application/octet-stream',
+          size: 100,
+        },
+      ],
+      'ch_test',
+      'msg1',
+    );
+
+    expect(files).toEqual([]);
   });
 });

@@ -33,7 +33,7 @@ describe('parseArchiveTimestamp', () => {
 });
 
 describe('cleanupArchivedSessions', () => {
-  it('reports old archived sessions in dry-run mode without deleting them', () => {
+  it('reports old archived sessions in dry-run mode without deleting them', async () => {
     const root = createTempDir();
     const oldArchive = join(root, 'alpha__archived_20000101T000000Z');
     const recentArchive = join(root, 'beta__archived_29990101T000000Z');
@@ -41,11 +41,11 @@ describe('cleanupArchivedSessions', () => {
     mkdirSync(oldArchive);
     mkdirSync(recentArchive);
 
-    const result = cleanupArchivedSessions(root, 30, { dryRun: true });
+    const result = await cleanupArchivedSessions(root, 30, { dryRun: true });
 
     expect(result.deleted).toEqual([oldArchive]);
     expect(result.skipped).toBe(1);
-    expect(listArchivedSessions(root).map((entry) => entry.path)).toEqual([
+    expect((await listArchivedSessions(root)).map((entry) => entry.path)).toEqual([
       oldArchive,
       recentArchive,
     ]);
@@ -53,7 +53,7 @@ describe('cleanupArchivedSessions', () => {
 });
 
 describe('listArchivedSessions', () => {
-  it('finds matching top-level directories and ignores non-matching entries', () => {
+  it('finds matching top-level directories and ignores non-matching entries', async () => {
     const root = createTempDir();
     const archived = join(root, 'gamma__archived_20240203T040506Z');
     const nestedRoot = join(root, 'nested');
@@ -64,7 +64,7 @@ describe('listArchivedSessions', () => {
     mkdirSync(nestedRoot);
     mkdirSync(join(nestedRoot, 'epsilon__archived_20240203T040506Z'));
 
-    const archivedSessions = listArchivedSessions(root);
+    const archivedSessions = await listArchivedSessions(root);
 
     expect(archivedSessions).toHaveLength(2);
     expect(archivedSessions.map((s) => s.name)).toContain('gamma__archived_20240203T040506Z');

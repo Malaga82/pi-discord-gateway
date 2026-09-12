@@ -1,4 +1,4 @@
-import { readdirSync, rmSync } from 'node:fs';
+import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { config } from '../config.js';
 import { purgeOldMessages } from '../db.js';
@@ -24,15 +24,19 @@ export function parseArchiveTimestamp(dirName: string): Date | undefined {
   return new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi, +s));
 }
 
-export function listArchivedSessions(sessionsDir: string): ArchivedSession[] {
+export async function listArchivedSessions(sessionsDir: string): Promise<ArchivedSession[]> {
   const results: ArchivedSession[] = [];
-  const stack = [sessionsDir];
+  const stack: Array<{ dir: string; depth: number }> = [{ dir: sessionsDir, depth: 0 }];
+
+  // Depth bound: archived dirs live at depth ≤ 3 (sessions/channel/archived);
+  // 4 leaves headroom without ever walking the full session history.
+  const MAX_WALK_DEPTH = 4;
 
   while (stack.length > 0) {
-    const dir = stack.pop()!;
+    const { dir, depth } = stack.pop()!;
     let entries;
     try {
-      entries = readdirSync(dir, { withFileTypes: true });
+      entries = await readdir(dir, { withFileTypes: true });
     } catch {
       continue;
     }
@@ -44,8 +48,8 @@ export function listArchivedSessions(sessionsDir: string): ArchivedSession[] {
 
       if (archivedAt) {
         results.push({ path: fullPath, name: entry.name, archivedAt });
-      } else {
-        stack.push(fullPath);
+      } else if (depth + 1 < MAX_WALK_DEPTH) {
+        stack.push({ dir: fullPath, depth: depth + 1 });
       }
     }
   }
@@ -53,11 +57,11 @@ export function listArchivedSessions(sessionsDir: string): ArchivedSession[] {
   return results.sort((a, b) => a.archivedAt.getTime() - b.archivedAt.getTime());
 }
 
-export function cleanupArchivedSessions(
+export async function cleanupArchivedSessions(
   sessionsDir: string,
   retentionDays: number,
   options: { dryRun?: boolean } = {},
-): { deleted: string[]; skipped: number } {
+): Promise<{ deleted: string[]; skipped: number }> {
   if (retentionDays === 0) {
     return { deleted: [], skipped: 0 };
   }
@@ -66,7 +70,7 @@ export function cleanupArchivedSessions(
   const deleted: string[] = [];
   let skipped = 0;
 
-  for (const archived of listArchivedSessions(sessionsDir)) {
+  for (const archived of await listArchivedSessions(sessionsDir)) {
     if (archived.archivedAt.getTime() > cutoff) {
       skipped += 1;
       continue;
@@ -82,7 +86,7 @@ export function cleanupArchivedSessions(
     }
 
     try {
-      rmSync(archived.path, { recursive: true, force: true });
+      await rm(archived.path, { recursive: true, force: true });
       deleted.push(archived.path);
       logger.info(
         { path: archived.path, archivedAt: archived.archivedAt.toISOString() },
@@ -102,10 +106,10 @@ export function startArchiveCleanup(): () => void {
     return () => {};
   }
 
-  const runOnce = () => {
+  const runOnce = async () => {
     try {
-      cleanupArchivedSessions(config.sessionsDir, config.archiveRetentionDays);
-      purgeOldMessages(config.archiveRetentionDays);
+      await cleanupArchivedSessions(config.sessionsDir, config.archiveRetentionDays);
+      await purgeOldMessages(config.archiveRetentionDays);
     } catch (err: any) {
       logger.warn({ err: err.message }, 'Archive cleanup error');
     }
@@ -113,8 +117,8 @@ export function startArchiveCleanup(): () => void {
 
   // Run immediately: a gateway restarted daily would otherwise never reach
   // the 24h interval and queue/log rows would grow forever.
-  runOnce();
-  const timer = setInterval(runOnce, CLEANUP_INTERVAL_MS);
+  void runOnce();
+  const timer = setInterval(() => void runOnce(), CLEANUP_INTERVAL_MS);
 
   return () => clearInterval(timer);
 }

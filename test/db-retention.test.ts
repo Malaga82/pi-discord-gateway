@@ -65,7 +65,7 @@ describe('purgeOldMessages', () => {
           )
           .run();
 
-        const purged = db.purgeOldMessages(30);
+        const purged = await db.purgeOldMessages(30);
         expect(purged.queue).toBe(2);
         expect(purged.log).toBe(1);
 
@@ -80,7 +80,7 @@ describe('purgeOldMessages', () => {
         expect(logRows.map((r) => r.content)).toEqual(['new']);
 
         // Retention disabled: no-op.
-        expect(db.purgeOldMessages(0)).toEqual({ queue: 0, log: 0 });
+        expect(await db.purgeOldMessages(0)).toEqual({ queue: 0, log: 0 });
       } finally {
         raw.close();
       }

@@ -377,7 +377,7 @@ async function cliArchiveList(): Promise<void> {
     import('../config.js'),
   ]);
 
-  const archivedSessions = listArchivedSessions(config.sessionsDir);
+  const archivedSessions = await listArchivedSessions(config.sessionsDir);
   if (archivedSessions.length === 0) {
     console.log(`No archived sessions found in ${config.sessionsDir}.`);
     return;
@@ -410,7 +410,7 @@ async function cliArchiveCleanup(args: string[]): Promise<void> {
     return;
   }
 
-  const result = cleanupArchivedSessions(config.sessionsDir, config.archiveRetentionDays, {
+  const result = await cleanupArchivedSessions(config.sessionsDir, config.archiveRetentionDays, {
     dryRun,
   });
   if (result.deleted.length === 0) {
