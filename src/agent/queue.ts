@@ -46,6 +46,13 @@ export function isChannelProcessing(jid: string): boolean {
   return activeChannels.has(jid);
 }
 
+/** True while at least one message is being processed. The archive cleanup
+ * uses it to defer the batched purge: its transaction stays open across
+ * yields, so concurrent enqueues would be swept into it. */
+export function hasActiveTasks(): boolean {
+  return activeTaskPromises.size > 0;
+}
+
 export function abortChannelTask(jid: string): { aborted: boolean; cleared: number } {
   const controller = activeChannelControllers.get(jid);
   const aborted = Boolean(controller);

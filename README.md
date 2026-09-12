@@ -80,7 +80,8 @@ During setup you pick one of three policies. This controls how the bot interacts
 | `open-trigger` | All guild channels auto-register, but only respond when @mentioned.    |
 | `allowlist`    | Only manually registered channels are active.                          |
 
-- DMs always auto-register when `AUTO_REGISTER_DMS=true` (the default).
+- DMs never auto-register by default (`AUTO_REGISTER_DMS=false`): a DM bypasses
+  the channel policy, so enabling it is an explicit choice.
 - Use `EXCLUDED_CHANNELS` to block specific channels from auto-registration in `open` / `open-trigger` mode.
 
 If you chose `allowlist`, register channels manually:

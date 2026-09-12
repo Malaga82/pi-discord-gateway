@@ -1,7 +1,8 @@
-import { execSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
+import { readCommandOutput } from './exec-output.js';
 import { config, resolveConfigPath } from '../config.js';
 import { closeDb, getAllChannels, initDb } from '../db.js';
 
@@ -116,21 +117,3 @@ function findExecutable(name: string): string | undefined {
   return readCommandOutput(`${cmd} ${name}`);
 }
 
-function readCommandOutput(command: string): string | undefined {
-  try {
-    const stdout = execSync(command, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
-    if (stdout) return stdout;
-  } catch {}
-  // Some commands (e.g. pi --version) output to stderr — retry with merge
-  try {
-    return (
-      execSync(command + ' 2>&1', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim() ||
-      undefined
-    );
-  } catch {
-    return undefined;
-  }
-}

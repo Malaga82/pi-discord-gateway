@@ -1,8 +1,9 @@
-import { execSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readCommandOutput } from './exec-output.js';
 import { defaultDataDir, resolveConfigPath } from '../config.js';
 
 const SERVICE_NAME = 'pi-discord-gateway';
@@ -120,14 +121,8 @@ export function buildPeerSymlinkExecStartPre(
 
   let globalRoot = options.globalRoot;
   if (globalRoot === undefined) {
-    try {
-      globalRoot = execSync('npm root -g', {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      }).trim();
-    } catch {
-      return undefined;
-    }
+    globalRoot = readCommandOutput('npm root -g');
+    if (globalRoot === undefined) return undefined;
   }
 
   const peerDir = join(globalRoot, '@earendil-works');

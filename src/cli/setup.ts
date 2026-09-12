@@ -1,8 +1,8 @@
-import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import * as clack from '@clack/prompts';
+import { readCommandOutput } from './exec-output.js';
 import { listAvailableModels } from '../agent/model-catalog.js';
 import { defaultDataDir, resolveConfigPath } from '../config.js';
 
@@ -260,7 +260,7 @@ export function buildConfigFile(options: {
     'MAX_SCHEDULED_CONCURRENCY=5',
     'POLL_INTERVAL_MS=1000',
     'SHUTDOWN_TIMEOUT_MS=15000',
-    'AUTO_REGISTER_DMS=true',
+    'AUTO_REGISTER_DMS=false',
     `CHANNEL_POLICY=${options.channelPolicy ?? 'allowlist'}`,
     'EXCLUDED_CHANNELS=',
     'MAX_ATTACHMENT_BYTES=26214400',
@@ -278,25 +278,6 @@ export function buildConfigFile(options: {
     'LOG_LEVEL=info',
     '',
   ].join('\n');
-}
-
-function readCommandOutput(command: string): string | undefined {
-  try {
-    const stdout = execSync(command, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
-    if (stdout) return stdout;
-  } catch {}
-  // Some commands (e.g. pi --version) output to stderr — retry with merge
-  try {
-    return (
-      execSync(command + ' 2>&1', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim() ||
-      undefined
-    );
-  } catch {
-    return undefined;
-  }
 }
 
 function errorMessage(err: unknown): string {

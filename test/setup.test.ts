@@ -18,5 +18,7 @@ describe('buildConfigFile', () => {
     expect(text).toContain('DB_PATH=/var/lib/pi-discord/gateway.db');
     // Safe default even when the caller omits the policy.
     expect(text).toContain('CHANNEL_POLICY=allowlist');
+    // The wizard must not reopen the DM port (regression: hardcoded true).
+    expect(text).toContain('AUTO_REGISTER_DMS=false');
   });
 });
