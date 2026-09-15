@@ -12,6 +12,10 @@ export interface RegisteredChannel {
   modelOverride: string;
   thinkingOverride: ThinkingLevel | '';
   cwdOverride: string;
+  parentJid?: string;
+  threadMode?: 'off' | 'auto';
+  managedThread?: boolean;
+  deletedAt?: string;
 }
 
 /** Queued message row from SQLite */
@@ -22,7 +26,24 @@ export interface QueuedMessage {
   sender_name: string;
   content: string;
   timestamp: string;
-  status: 'pending' | 'processing' | 'done' | 'failed';
+  status:
+    | 'pending'
+    | 'routing'
+    | 'processing'
+    | 'delivering'
+    | 'done'
+    | 'failed'
+    | 'interrupted'
+    | 'cancelled'
+    | 'delivery_failed'
+    | 'delivery_uncertain';
+  source_message_id: string | null;
+  origin_jid: string | null;
+  route_thread: number;
+  anchor_message_id: string | null;
+  response_text: string | null;
+  delivery_attempts: number;
+  next_attempt_at: number;
   /** JSON array of attachment metadata, or null */
   attachments: string | null;
   /** Invocation attempts so far (incremented at claim; recovery gives up at max) */
@@ -38,4 +59,6 @@ export interface AgentResult {
   killed?: boolean;
   /** Invocation exceeded AGENT_TIMEOUT_MS (error reported, activity log preserved) */
   timedOut?: boolean;
+  /** Upstream runProcess semantics (mapped from killed/timedOut equivalents) */
+  reason?: 'cancelled' | 'timeout';
 }

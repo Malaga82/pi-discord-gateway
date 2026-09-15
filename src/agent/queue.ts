@@ -14,9 +14,9 @@ import {
   clearPendingMessages,
   markMessageDone,
   markMessageFailed,
-  recoverStuckMessages,
   logMessage,
   getChannel,
+  recoverStuckMessagesWithBudget,
 } from '../db.js';
 import { invokeAgent } from './invoke.js';
 import { sendResponse, setTyping } from '../discord/client.js';
@@ -68,6 +68,9 @@ export function abortChannelTask(jid: string): { aborted: boolean; cleared: numb
   return { aborted, cleared };
 }
 
+/* ponytail: upstream 2.0.0 threads routing (claimNextMessage status 'routing'
+ * + routeQueuedMessage) non agganciato: thread_mode default 'off' lo tiene
+ * inerte; agganciare in queue.dispatch quando si attiva la feature. */
 export function startProcessingLoop(): void {
   if (running) return;
 
@@ -76,7 +79,7 @@ export function startProcessingLoop(): void {
 
   // Recover messages stuck in 'processing' from a previous crash; ones over
   // the attempt budget die as failed (they keep killing pi — OOM prompts etc).
-  const { recovered, abandoned, abandonedByChannel } = recoverStuckMessages(
+  const { recovered, abandoned, abandonedByChannel } = recoverStuckMessagesWithBudget(
     config.maxMessageAttempts,
   );
   if (abandoned > 0) {
@@ -270,7 +273,9 @@ async function processMessage(
     // skipped on this very message.
     const desiredCwd = channel.cwdOverride || config.piCwd;
     if (!hasCachedModelCatalog(desiredCwd)) {
-      await refreshModelCatalogAsync(desiredCwd);
+      // Best-effort warm (upstream 2.0.0 semantics: discovery failures retain
+      // stale data; the message must not die because the catalog is cold).
+      await refreshModelCatalogAsync(desiredCwd).catch(() => undefined);
     }
 
     const effective = computeEffectiveChannelSettings(channel);

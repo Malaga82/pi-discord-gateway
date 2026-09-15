@@ -164,7 +164,7 @@ export async function invokeAgent(
   const prompt = attachmentPrompt ? `${userText}\n\n${attachmentPrompt}` : userText;
   args.push('-p', prompt);
 
-  const { bin: effectiveBin, args: effectiveArgs } = resolvePiSpawn(config.piBin, args);
+  const { bin: effectiveBin, args: effectiveArgs } = await resolvePiSpawn(config.piBin, args);
 
   logger.debug(
     { bin: effectiveBin, args: effectiveArgs.slice(0, -1), channelFolder, cwd: effectiveCwd },
@@ -509,7 +509,7 @@ async function getSessionStatsViaRpc(
   cwd: string,
 ): Promise<{ tokens: SessionTokenUsage; contextUsage?: SessionContextUsage }> {
   const args = ['--mode', 'rpc', '--session', sessionFile];
-  const { bin: rpcBin, args: rpcArgs } = resolvePiSpawn(config.piBin, args);
+  const { bin: rpcBin, args: rpcArgs } = await resolvePiSpawn(config.piBin, args);
 
   return new Promise((resolve, reject) => {
     const proc = spawn(rpcBin, rpcArgs, {

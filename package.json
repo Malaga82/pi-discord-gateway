@@ -1,6 +1,6 @@
 {
   "name": "piscord",
-  "version": "1.8.5",
+  "version": "2.0.0",
   "description": "Lightweight Discord gateway for pi coding agent",
   "license": "MIT",
   "repository": {
@@ -42,11 +42,12 @@
     "format:check": "prettier --check .",
     "start": "node dist/cli/index.js start",
     "dev": "tsx src/cli/index.ts start",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test:compat": "npm run build && node scripts/compat-smoke.mjs"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.84.4 <2",
-    "@earendil-works/pi-coding-agent": ">=0.84.4 <2"
+    "@earendil-works/pi-ai": ">=0.83.0 <0.86.0",
+    "@earendil-works/pi-coding-agent": ">=0.83.0 <0.86.0"
   },
   "dependencies": {
     "@clack/prompts": "^0.11.0",
@@ -56,11 +57,12 @@
     "dotenv": "^16.5.0",
     "minimatch": "^10.0.1",
     "pino": "^9.6.0",
-    "pino-pretty": "^13.0.0"
+    "pino-pretty": "^13.0.0",
+    "proper-lockfile": "^4.1.2"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.85.1",
-    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-coding-agent": "0.85.1",
     "@eslint/js": "^10.0.1",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.15.0",
@@ -70,6 +72,7 @@
     "tsx": "^4.19.0",
     "typescript": "^5.8.0",
     "typescript-eslint": "^8.59.3",
-    "vitest": "^4.1.2"
+    "vitest": "^4.1.2",
+    "@types/proper-lockfile": "^4.1.4"
   }
 }
