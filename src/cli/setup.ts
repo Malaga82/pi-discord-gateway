@@ -1,9 +1,10 @@
+import { execFileSync } from 'node:child_process';
+import { checkPiExecutable } from './preflight.js';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import * as clack from '@clack/prompts';
-import { readCommandOutput } from './exec-output.js';
-import { listAvailableModels } from '../agent/model-catalog.js';
+import { config } from '../config.js';
 import { defaultDataDir, resolveConfigPath } from '../config.js';
 
 const SERVICE_NAME = 'pi-discord-gateway';
@@ -12,7 +13,10 @@ const DEFAULT_WORKING_DIR = homedir();
 const DEFAULT_DATA_DIR = defaultDataDir();
 const DEFAULT_SESSIONS_DIR = resolve(DEFAULT_DATA_DIR, 'sessions');
 const DEFAULT_DB_PATH = resolve(DEFAULT_DATA_DIR, 'gateway.db');
-const AUTH_PATH = resolve(homedir(), '.pi/agent/auth.json');
+const AUTH_PATH = resolve(
+  process.env.PI_CODING_AGENT_DIR || resolve(homedir(), '.pi/agent'),
+  'auth.json',
+);
 
 export async function runSetup(args: string[]): Promise<void> {
   const tokenArg = args[0]?.trim() ?? '';
@@ -28,23 +32,15 @@ export async function runSetup(args: string[]): Promise<void> {
   clack.intro('piscord setup');
 
   // ── Prerequisites ──
-  // Node floor is enforced at main() entry, before this module is ever
-  // imported — the ✓ row below is a guaranteed truth, not a live check.
-  // Sync log, not a spinner: checkPrerequisites() blocks the event loop with
-  // spawnSync calls, so a clack.spinner() interval would never fire.
-  clack.log.info('Checking prerequisites (pi --version, model catalog)…');
-  const prereqs = checkPrerequisites();
+  const prereqs = await checkPrerequisites();
   const prereqLines = [
-    `  ✓ Node.js: v${process.versions.node}`,
     prereqs.piPath
       ? `  ✓ pi binary: ${prereqs.piPath}${prereqs.piVersion ? ` (${prereqs.piVersion})` : ''}`
       : '  ✗ pi binary: not found in PATH — install pi first',
     prereqs.authFound ? `  ✓ pi auth: found` : `  ✗ pi auth: missing — run "pi" and log in first`,
-    prereqs.modelCount === undefined
-      ? `  ✗ models: unavailable`
-      : prereqs.modelCount
-        ? `  ✓ models: ${prereqs.modelCount} available`
-        : `  ✗ models: none available`,
+    prereqs.modelCount !== undefined
+      ? `  ✓ models: ${prereqs.modelCount} available`
+      : `  ✗ models: unavailable`,
   ];
   clack.note(prereqLines.join('\n'), 'Prerequisites');
 
@@ -114,7 +110,7 @@ export async function runSetup(args: string[]): Promise<void> {
           hint: 'Only respond in manually registered channels (piscord register ...)',
         },
       ],
-      initialValue: 'allowlist' as const,
+      initialValue: 'open' as const,
     });
     if (clack.isCancel(result)) {
       clack.cancel('Setup cancelled.');
@@ -154,7 +150,6 @@ export async function runSetup(args: string[]): Promise<void> {
       sessionsDir: DEFAULT_SESSIONS_DIR,
       dbPath: DEFAULT_DB_PATH,
     }),
-    { mode: 0o600 }, // the file contains DISCORD_BOT_TOKEN
   );
 
   clack.log.success(`Config written to: ${configPath}`);
@@ -172,18 +167,17 @@ export async function runSetup(args: string[]): Promise<void> {
     }
 
     if (installDaemon) {
-      // Sync log lines, not a spinner: runDaemon() blocks the event loop with
-      // execSync/spawnSync (first frame needs ~80ms of idle loop), and its
-      // stdio: 'inherit' systemctl output would overwrite spinner frames.
-      clack.log.info(`Installing ${serviceName} service...`);
+      const s = clack.spinner();
+      s.start(`Installing ${serviceName} service...`);
       try {
         const { runDaemon } = await import('./daemon.js');
         runDaemon('install');
-        clack.log.info('Starting service...');
+        s.message('Starting service...');
         runDaemon('start');
-        clack.log.success('Service installed and started.');
+        s.stop('Service installed and started.');
         clack.log.success(`${SERVICE_NAME} is active`);
       } catch (err) {
+        s.stop('Service installation failed.');
         clack.log.error(errorMessage(err));
         clack.log.info(
           'You can install manually later: piscord daemon install && piscord daemon start',
@@ -204,19 +198,24 @@ export async function runSetup(args: string[]): Promise<void> {
   clack.outro('Setup complete! Send a message in any Discord channel to test.');
 }
 
-function checkPrerequisites(): {
+async function checkPrerequisites(): Promise<{
   piPath: string | undefined;
   piVersion: string | undefined;
   authFound: boolean;
   modelCount: number | undefined;
-} {
-  const piPath = findExecutable('pi');
-  const piVersion = piPath ? readCommandOutput('pi --version') : undefined;
+}> {
+  const piVersion = await checkPiExecutable(config.piBin, config.piCwd);
+  const piPath = findExecutable(config.piBin) || config.piBin;
   const authFound = existsSync(AUTH_PATH);
   let modelCount: number | undefined;
 
   try {
-    modelCount = listAvailableModels({ forceRefresh: true }).length;
+    const { refreshModelCatalog, stopModelCatalog } = await import('../agent/model-catalog.js');
+    try {
+      modelCount = (await refreshModelCatalog(config.piCwd)).length;
+    } finally {
+      await stopModelCatalog();
+    }
   } catch {
     modelCount = undefined;
   }
@@ -226,7 +225,7 @@ function checkPrerequisites(): {
 
 function findExecutable(name: string): string | undefined {
   const cmd = process.platform === 'win32' ? 'where' : 'which';
-  return readCommandOutput(`${cmd} ${name}`);
+  return readCommandOutput(cmd, [name]);
 }
 
 function isUnix(): boolean {
@@ -280,6 +279,20 @@ export function buildConfigFile(options: {
   ].join('\n');
 }
 
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+function readCommandOutput(command: string, args: string[]): string | undefined {
+  try {
+    return (
+      execFileSync(command, args, {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 5_000,
+      }).trim() || undefined
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

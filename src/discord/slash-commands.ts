@@ -2,6 +2,7 @@ import {
   MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
+  ChannelType,
   type AutocompleteInteraction,
   type ChatInputCommandInteraction,
   type Client,
@@ -16,6 +17,8 @@ import {
 import { config } from '../config.js';
 import {
   clearChannelModelOverride,
+  clearChannelThinkingOverride,
+  setChannelThreadMode,
   clearPendingMessages,
   createDmChannel,
   getChannel,
@@ -29,6 +32,8 @@ import {
   hasCachedModelCatalog,
   isModelCatalogStale,
   isThinkingLevel,
+  refreshModelCatalog,
+  getModelCatalogStatus,
   listSelectableModels,
   refreshModelCatalogAsync,
   resolveModelReference,
@@ -39,6 +44,7 @@ import {
   buildThinkingAdjustmentMessage,
   computeEffectiveChannelSettings,
   getDesiredThinkingLevel,
+  getEffectiveCwd,
   type EffectiveChannelSettings,
 } from '../agent/channel-settings.js';
 import { abortChannelTask, isChannelProcessing } from '../agent/queue.js';
@@ -52,6 +58,17 @@ const PI_COMMAND = new SlashCommandBuilder()
   // status reveals host paths — keep them to moderators by default (server
   // admins can still override per-channel; DMs are unaffected).
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+  .addSubcommand((sub) =>
+    sub
+      .setName('threads')
+      .setDescription('Automatically answer new questions in threads in this channel')
+      .addBooleanOption((option) =>
+        option.setName('enabled').setDescription('Enable automatic threads').setRequired(true),
+      ),
+  )
+  .addSubcommand((sub) =>
+    sub.setName('reset-thinking').setDescription('Inherit the default thinking level again'),
+  )
   .addSubcommand((sub) =>
     sub
       .setName('status')
@@ -116,7 +133,7 @@ export async function handleAutocomplete(interaction: AutocompleteInteraction): 
     return;
   }
 
-  const cwd = channel.cwdOverride || config.piCwd;
+  const cwd = getEffectiveCwd(channel);
   if (!hasCachedModelCatalog(cwd)) {
     await interaction.respond([]);
     void refreshModelCatalogAsync(cwd).catch((err: any) => {
@@ -151,6 +168,68 @@ export async function handleChatCommand(interaction: ChatInputCommandInteraction
 
   try {
     switch (subcommand) {
+      case 'threads': {
+        if (!interaction.inGuild() || interaction.channel?.type !== ChannelType.GuildText) {
+          await interaction.reply(
+            reply(
+              'Automatic threads can be configured in a regular server text channel.',
+              interaction,
+            ),
+          );
+          return;
+        }
+        if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels)) {
+          await interaction.reply(
+            reply(
+              'Manage Channels permission is required to change automatic threads.',
+              interaction,
+            ),
+          );
+          return;
+        }
+        const channel = ensureManagedChannel(interaction);
+        if (!channel) {
+          await interaction.reply(reply(notRegisteredMessage(), interaction));
+          return;
+        }
+        const enabled = interaction.options.getBoolean('enabled', true);
+        const permissions = interaction.appPermissions;
+        if (
+          enabled &&
+          (!permissions?.has(PermissionFlagsBits.CreatePublicThreads) ||
+            !permissions.has(PermissionFlagsBits.SendMessagesInThreads))
+        ) {
+          await interaction.reply(
+            reply(
+              'The bot needs Create Public Threads and Send Messages in Threads permissions.',
+              interaction,
+            ),
+          );
+          return;
+        }
+        setChannelThreadMode(channel.jid, enabled ? 'auto' : 'off');
+        await interaction.reply(
+          reply(
+            enabled
+              ? 'New questions in this channel will open separate conversation threads. Continue each conversation inside its thread.'
+              : 'Automatic thread creation is off. Existing threads keep their conversations.',
+            interaction,
+          ),
+        );
+        return;
+      }
+      case 'reset-thinking': {
+        const channel = ensureManagedChannel(interaction);
+        if (!channel) {
+          await interaction.reply(reply(notRegisteredMessage(), interaction));
+          return;
+        }
+        clearChannelThinkingOverride(channel.jid);
+        await interaction.reply(
+          reply('Thinking reset; this conversation will inherit its default again.', interaction),
+        );
+        return;
+      }
       case 'status':
         await handleStatus(interaction);
         return;
@@ -265,8 +344,11 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
 
   const effective = computeEffectiveChannelSettings(channel);
   const sessionStatus = await getChannelSessionStatus(channel.folder, effective.effectiveCwd);
+  const threadStatus = channel.parentJid
+    ? `Settings inherit from <#${channel.parentJid.replace(/^dc:/, '')}> unless overridden.`
+    : `Automatic threads: ${channel.threadMode === 'auto' ? 'on' : 'off'}.`;
   await interaction.editReply({
-    content: buildStatusMessage(effective, sessionStatus, { isDm: !interaction.inGuild() }),
+    content: `${buildStatusMessage(effective, sessionStatus, { isDm: !interaction.inGuild() })}\n${threadStatus}`,
   });
 }
 
@@ -282,9 +364,9 @@ async function handleModelSet(interaction: ChatInputCommandInteraction): Promise
   );
 
   const selectedRef = interaction.options.getString('model', true);
-  const cwd = channel.cwdOverride || config.piCwd;
-  await refreshModelCatalogAsync(cwd);
-  const models = await listSelectableModels({ allowStale: true, cwd });
+  const cwd = getEffectiveCwd(channel);
+  const models = await listSelectableModels({ forceRefresh: true, cwd });
+
   const selectedModel = resolveModelReference(selectedRef, models);
   if (!selectedModel) {
     await interaction.editReply({ content: `Model is no longer available: ${selectedRef}` });
@@ -331,9 +413,6 @@ async function handleModelReset(interaction: ChatInputCommandInteraction): Promi
   clearChannelModelOverride(channel.jid);
 
   const updated = getChannel(channel.jid)!;
-  // Refresh via the async (execFile) path — the sync `forceRefresh` here used
-  // to run a blocking spawnSync on the Discord event loop for up to 15s.
-  await refreshModelCatalogAsync(updated.cwdOverride || config.piCwd);
   const effective = computeEffectiveChannelSettings(updated);
   const notes = ['Model reset for this channel.'];
 
@@ -370,7 +449,7 @@ async function handleThinkingSet(interaction: ChatInputCommandInteraction): Prom
     interaction.inGuild() ? { flags: MessageFlags.Ephemeral } : undefined,
   );
 
-  await refreshModelCatalogAsync(channel.cwdOverride || config.piCwd);
+  await refreshModelCatalog(getEffectiveCwd(channel)).catch(() => undefined);
   const effective = computeEffectiveChannelSettings(channel);
   const resolution = resolveThinkingForModel(effective.modelInfo, rawLevel);
 
@@ -418,6 +497,7 @@ export function buildStatusMessage(
 ): string {
   const rows: Array<[string, string]> = [
     ['Model', formatModelValue(effective)],
+    ['Model catalog', getModelCatalogStatus(effective.effectiveCwd)],
     ['Thinking', formatThinkingValue(effective)],
   ];
 
@@ -477,11 +557,13 @@ function formatThinkingFallback(effective: EffectiveChannelSettings): string {
 }
 
 function formatWorkingDirValue(effective: EffectiveChannelSettings): string {
-  return `${effective.effectiveCwd} (${effective.cwdSource === 'override' ? 'channel' : 'gateway'})`;
+  return `${effective.effectiveCwd} (${formatSettingSource(effective.cwdSource)})`;
 }
 
 function formatSettingSource(source: EffectiveChannelSettings['modelSource']): string {
   switch (source) {
+    case 'parent':
+      return 'parent channel';
     case 'override':
       return 'channel';
     case 'default':

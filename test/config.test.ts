@@ -1,7 +1,13 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const home = vi.hoisted(() => ({ value: undefined as string | undefined }));
+vi.mock('node:os', async (original) => {
+  const actual = await original<typeof import('node:os')>();
+  return { ...actual, homedir: () => home.value ?? actual.homedir() };
+});
 
 const originalCwd = process.cwd();
 const originalEnv = { ...process.env };
@@ -12,7 +18,8 @@ const CONFIG_ENV_KEYS = [
   'DB_PATH',
   'LOCALAPPDATA',
   'DISCORD_BOT_TOKEN',
-  'HOME',
+  'APPDATA',
+  'LOCALAPPDATA',
   'LOG_LEVEL',
   'MAX_ATTACHMENT_BYTES',
   'MAX_CONCURRENCY',
@@ -30,7 +37,14 @@ const CONFIG_ENV_KEYS = [
   'TRIGGER_NAME',
 ];
 
+beforeEach(() => {
+  home.value = createTempDir();
+  process.env.APPDATA = resolve(home.value, 'AppData/Roaming');
+  process.env.LOCALAPPDATA = resolve(home.value, 'AppData/Local');
+});
+
 afterEach(() => {
+  home.value = undefined;
   vi.resetModules();
   process.chdir(originalCwd);
 
@@ -84,7 +98,7 @@ describe('config loading', () => {
     });
 
     process.chdir(workDir);
-    process.env.HOME = homeDir;
+    home.value = homeDir;
     process.env.PIDG_CONFIG = configPath;
     process.env.PI_CWD = '/env/project';
     delete process.env.DB_PATH;
@@ -114,7 +128,7 @@ describe('config loading', () => {
     });
 
     process.chdir(workDir);
-    process.env.HOME = homeDir;
+    home.value = homeDir;
     delete process.env.PIDG_CONFIG;
     delete process.env.DB_PATH;
     delete process.env.SESSIONS_DIR;
@@ -132,7 +146,7 @@ describe('config loading', () => {
     const workDir = createTempDir();
 
     process.chdir(workDir);
-    process.env.HOME = homeDir;
+    home.value = homeDir;
     delete process.env.PIDG_CONFIG;
     delete process.env.DB_PATH;
     delete process.env.SESSIONS_DIR;

@@ -47,12 +47,12 @@ describe('message attempt budget', () => {
     for (let i = 1; i <= 2; i++) {
       const msg = db.claimNextMessage('dc:1');
       expect(msg?.attempts).toBe(i);
-      expect(db.recoverStuckMessages(3).recovered).toBe(1); // still under budget
+      expect(db.recoverStuckMessagesWithBudget(3).recovered).toBe(1); // still under budget
     }
 
     // Third claim reaches the budget: recovery abandons the row instead.
     expect(db.claimNextMessage('dc:1')?.attempts).toBe(3);
-    const { recovered, abandoned } = db.recoverStuckMessages(3);
+    const { recovered, abandoned } = db.recoverStuckMessagesWithBudget(3);
     expect(recovered).toBe(0);
     expect(abandoned).toBe(1);
     expect(db.claimNextMessage('dc:1')).toBeUndefined();
@@ -66,6 +66,6 @@ describe('message attempt budget', () => {
       timestamp: new Date().toISOString(),
     });
     expect(db.claimNextMessage('dc:1')?.attempts).toBe(1);
-    expect(db.recoverStuckMessages(3).recovered).toBe(1);
+    expect(db.recoverStuckMessagesWithBudget(3).recovered).toBe(1);
   });
 });

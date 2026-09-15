@@ -4,11 +4,12 @@ import { initDb, closeDb, getAllChannels } from './db.js';
 import { startDiscord, stopDiscord, getBotTag } from './discord/client.js';
 import { startArchiveCleanup } from './session/archive-cleanup.js';
 import { startMediaCleanup } from './session/media.js';
-import { refreshModelCatalogAsync } from './agent/model-catalog.js';
+import { refreshModelCatalog, stopModelCatalog } from './agent/model-catalog.js';
+import { runPool } from './util/run-pool.js';
 import { startProcessingLoop, stopProcessingLoop } from './agent/queue.js';
 import { startScheduler } from './agent/scheduler.js';
-import { acquireInstanceLock, releaseInstanceLock } from './single-instance.js';
-import { runPool } from './util/run-pool.js';
+import { acquireInstanceLock } from './instance-lock.js';
+import { startThreadMaintenance } from './discord/threads.js';
 
 /**
  * pi-discord-gateway - Lightweight Discord gateway for pi coding agent.
@@ -23,15 +24,26 @@ export async function startGateway(): Promise<void> {
     );
   }
 
-  // Lock before touching the DB: a second instance must not init/migrate
-  // anything before losing the race.
-  const lockPath = `${config.dbPath}.lock`;
-  acquireInstanceLock(lockPath);
-  initDb();
+  const releaseLock = await acquireInstanceLock(config.dbPath, (err) => {
+    logger.fatal({ err }, 'Gateway instance lock lost');
+    process.exitCode = 1;
+    void stopProcessingLoop({ timeoutMs: 0 })
+      .then(() => shutdown('instance lock lost'))
+      .catch((error) => logger.error({ err: error }, 'Cleanup after lock loss failed'))
+      .finally(() => resolveSignalWait());
+  });
+  try {
+    initDb();
+  } catch (error) {
+    closeDb();
+    await releaseLock();
+    throw error;
+  }
 
   let stopArchiveCleanup = () => {};
   let stopMediaCleanup = () => {};
   let stopScheduler = () => {};
+  let stopThreads: () => Promise<void> = async () => {};
   let processingStarted = false;
   let shutdownPromise: Promise<void> | null = null;
 
@@ -62,16 +74,18 @@ export async function startGateway(): Promise<void> {
       logger.info({ reason }, 'Shutting down gateway');
 
       stopScheduler();
+      // Stop dispatch and start the grace timer before waiting on Discord I/O.
+      const stoppedProcessing = processingStarted
+        ? stopProcessingLoop({ timeoutMs: config.shutdownTimeoutMs })
+        : Promise.resolve();
       stopArchiveCleanup();
       stopMediaCleanup();
+      await Promise.all([stoppedProcessing, stopThreads()]);
 
-      if (processingStarted) {
-        await stopProcessingLoop({ timeoutMs: config.shutdownTimeoutMs });
-      }
-
+      await stopModelCatalog();
       stopDiscord();
       closeDb();
-      releaseInstanceLock(lockPath);
+      await releaseLock();
       logger.info('Gateway stopped');
     })();
 
@@ -80,7 +94,6 @@ export async function startGateway(): Promise<void> {
 
   try {
     logger.info('Starting pi-discord-gateway...');
-    // Async + parallel: no serial blocking spawnSync chain at startup.
     void warmModelCatalogs();
 
     await startDiscord();
@@ -92,6 +105,7 @@ export async function startGateway(): Promise<void> {
     startProcessingLoop();
     processingStarted = true;
     stopScheduler = startScheduler();
+    stopThreads = startThreadMaintenance();
     stopArchiveCleanup = startArchiveCleanup();
     stopMediaCleanup = startMediaCleanup();
 
@@ -121,13 +135,13 @@ async function warmModelCatalogs(): Promise<void> {
       .filter(Boolean),
   ]);
 
-  // Each distinct cwd spawns a pi process (100-200 MB RSS): cap the startup
-  // spike instead of launching them all at once.
+  // Fork: cap the startup spike — each distinct cwd spawns a pi process
+  // (100-200 MB RSS); unbounded allSettled launches them all at once.
   await runPool(
     [...workingDirectories].map((cwd) => async () => {
       try {
-        await refreshModelCatalogAsync(cwd);
-        logger.info({ cwd }, 'Model catalog warmed');
+        const models = await refreshModelCatalog(cwd);
+        logger.info({ cwd, models: models.length }, 'Model catalog warmed');
       } catch (err: any) {
         logger.warn({ cwd, err: err?.message }, 'Failed to warm model catalog');
       }

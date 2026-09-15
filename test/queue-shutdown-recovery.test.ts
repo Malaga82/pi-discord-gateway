@@ -50,7 +50,7 @@ afterEach(() => {
 
 /**
  * A turn killed by a gateway shutdown must stay recoverable: the queue row
- * stays 'processing' so recoverStuckMessages() at the next boot re-enqueues
+ * stays 'processing' so recoverStuckMessagesWithBudget() at the next boot re-enqueues
  * it and the answer is regenerated and delivered without user action.
  */
 describe('killed message recovery', () => {
@@ -114,9 +114,9 @@ describe('killed message recovery', () => {
       );
 
       // No answer was delivered (nothing to deliver), and the row must NOT
-      // be 'failed': the next boot's recoverStuckMessages() has to pick it up.
+      // be 'failed': the next boot's recoverStuckMessagesWithBudget() has to pick it up.
       expect(sendResponseMock).not.toHaveBeenCalled();
-      expect(db.recoverStuckMessages(3).recovered).toBe(1);
+      expect(db.recoverStuckMessagesWithBudget(3).recovered).toBe(1);
     } finally {
       queue.stopProcessingLoop({ timeoutMs: 0 });
     }
@@ -190,7 +190,7 @@ describe('killed message recovery', () => {
       );
 
       // The stopped task must NOT come back at the next boot.
-      expect(db.recoverStuckMessages(3).recovered).toBe(0);
+      expect(db.recoverStuckMessagesWithBudget(3).recovered).toBe(0);
     } finally {
       queue.stopProcessingLoop({ timeoutMs: 0 });
     }
@@ -238,7 +238,7 @@ describe('killed message recovery', () => {
       // Burn the attempt budget: three claim cycles with reboots between.
       for (let i = 0; i < 3; i++) {
         expect(db.claimNextMessage('dc:123')?.attempts).toBe(i + 1);
-        if (i < 2) db.recoverStuckMessages(3);
+        if (i < 2) db.recoverStuckMessagesWithBudget(3);
       }
       // Row is 'processing' with attempts = 3 → the next boot abandons it.
 
