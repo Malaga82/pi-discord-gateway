@@ -18,7 +18,7 @@ export function checkPiDependencies(): void {
     try {
       directory = dirname(fileURLToPath(import.meta.resolve(name)));
     } catch {
-      throw new Error(`Required peer dependency ${name} is missing. Install pi >=0.83.0 <0.86.0.`);
+      throw new Error(`Required peer dependency ${name} is missing. Install pi >=0.83.0 <0.87.0.`);
     }
     let version: string | undefined;
     while (true) {

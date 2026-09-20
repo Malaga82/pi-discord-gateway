@@ -86,16 +86,71 @@ export function isUncertainChunk(chunk: ResponseChunk): boolean {
   );
 }
 
-export function splitResponse(text: string, max = 2000): string[] {
+export function splitMessage(text: string, max: number): string[] {
   const chunks: string[] = [];
   let remaining = text;
+
+  const isLowSurrogate = (i: number) => /^[\uDC00-\uDFFF]/.test(remaining[i] ?? '');
+
   while (remaining.length > max) {
-    let end = remaining.lastIndexOf('\n', max);
-    if (end <= 0) end = max;
-    const last = remaining.charCodeAt(end - 1);
-    if (last >= 0xd800 && last <= 0xdbff) end--;
-    chunks.push(remaining.slice(0, end));
-    remaining = remaining.slice(end).replace(/^\n/, '');
+    // Try to split at last newline within limit
+    let splitAt = remaining.lastIndexOf('\n', max);
+    if (splitAt <= 0) splitAt = max; // hard split if no newline
+    // Never cut a UTF-16 surrogate pair in half (would corrupt emoji).
+    // splitAt pointing AT a low surrogate = cut between the pair's halves.
+    // splitAt===1 with a pair at [0,1] can't step back to 0 (empty chunk,
+    // infinite loop) — include the whole pair in the chunk instead.
+    if (isLowSurrogate(splitAt)) {
+      splitAt = splitAt > 1 ? splitAt - 1 : Math.min(2, remaining.length);
+    }
+
+    let chunk = remaining.slice(0, splitAt);
+    let rest = remaining.slice(splitAt).replace(/^\n/, '');
+    let fenceLines = chunk.match(/^```.*$/gm) ?? [];
+
+    // Never cut a ``` fence in half: close it at the end of the chunk and
+    // reopen it (same tag line) at the start of the next one. The closing
+    // "\n```" needs 4 chars of budget, and the split must consume MORE than
+    // the reopen prefix adds, or `remaining` would grow and loop forever
+    // (degenerate case: the only newline nearby is the fence line itself).
+    if (fenceLines.length % 2 === 1 && rest) {
+      let openFence = fenceLines[fenceLines.length - 1] ?? '```';
+      const minSplit = openFence.length + 2;
+      if (chunk.length > max - 4 || splitAt < minSplit) {
+        splitAt = max - 4;
+        if (isLowSurrogate(splitAt)) {
+          splitAt = splitAt > 1 ? splitAt - 1 : Math.min(2, remaining.length);
+        }
+        chunk = remaining.slice(0, splitAt);
+        rest = remaining.slice(splitAt);
+        fenceLines = chunk.match(/^```.*$/gm) ?? [];
+        openFence = fenceLines[fenceLines.length - 1] ?? '```';
+      }
+      // Reopening costs openFence.length+1 chars of every subsequent
+      // iteration. A fence line comparable to the cap shrinks progress to a
+      // crawl (7 KB answer → thousands of 2 KB messages) or to zero (infinite
+      // loop, OOM). Require the fence to be well under half the cap so each
+      // pass consumes a useful chunk; otherwise leave the tail unfenced
+      // (degraded rendering beats a flooded channel or a hung gateway).
+      if (fenceLines.length % 2 === 1 && openFence.length + 1 < max / 2) {
+        chunk = `${chunk}\n\u0060\u0060\u0060`;
+        rest = `${openFence}\n${rest.replace(/^\n/, '')}`;
+      }
+    }
+
+    if (rest.length >= remaining.length) {
+      // Hard guarantee of forward progress, whatever the fence logic did.
+      // Unreachable while the reopen threshold holds, but keep it surrogate-
+      // safe in case the threshold ever changes.
+      let cut = max;
+      if (isLowSurrogate(cut)) cut = cut > 1 ? cut - 1 : Math.min(2, remaining.length);
+      chunks.push(remaining.slice(0, cut));
+      remaining = remaining.slice(cut);
+      continue;
+    }
+
+    chunks.push(chunk);
+    remaining = rest;
   }
   if (remaining) chunks.push(remaining);
   return chunks;

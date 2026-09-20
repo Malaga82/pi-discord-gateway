@@ -66,11 +66,20 @@ All notable changes to this project will be documented in this file.
 - The JSONL line reader drops lines over 2 MB instead of buffering them without bound.
 - Tool-argument previews use a bounded depth/entry/length serializer instead of `JSON.stringify` on arbitrarily large objects (one synchronous event-loop tick per huge tool call, removed).
 
+### Fixed (residuals)
+
+- Durable answer chunks are now split fence-aware: the queue uses `splitMessage` (moved to `delivery.ts`, re-exported from `client.ts`) so a long fenced block is closed at the chunk boundary and reopened in the next chunk instead of being cut in half. `splitResponse` (no fence handling) is gone.
+- pi support range stated consistently everywhere: peerDependencies `>=0.83.0 <0.87.0`, the missing-peer preflight message, and the README requirements (the executable bound already accepted 0.86.x).
+
+### Known ceilings
+
+- pi invocations run detached (own process group) so timeout/abort can kill the whole tree; a SIGKILL of the gateway itself can orphan that group until pi's next stdout write fails (EPIPE). Full fix = the runProcess supervisor IPC, which does not support JSONL streaming yet.
+
 ### Changed
 
 - `engines.node` raised from `>=20.3` to `>=22.19.0`: the floor is imposed by the pi peer packages (`@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` both require Node >= 22.19); no gateway API needs 22 specifically.
 - every `piscord` command now fails fast with an explicit Node message at the top of `main()`, before any dynamic import links pi — `engines` alone is documentation, npm does not enforce it unless `engine-strict` is set.
-- pi peer dependencies bounded to `>=0.84.4 <2` (was `*`), plus a test asserting the three `pi-coding-agent` exports the gateway statically links: an upstream rename now breaks CI instead of production boot. Dev pin and lockfile on 0.85.1 — the version actually deployed — so the canary asserts what runs, not a stale family.
+- pi peer dependencies bounded (was `*`), plus a test asserting the three `pi-coding-agent` exports the gateway statically links: an upstream rename now breaks CI instead of production boot. Range now `>=0.83.0 <0.87.0` (0.86.x accepted after the pi update, matching `assertSupportedPiVersion`); dev pin and lockfile stay on 0.85.1 as the canary floor.
 - CI matrix runs the declared floor (22.19.0) and Node 24 on ubuntu, and pins the Windows parity job to the floor too, instead of only the latest 22.x. A `npm audit --omit=dev` step now gates runtime dependencies (dev-tree advisories do not reach consumers and stay non-blocking).
 
 ### Fixed

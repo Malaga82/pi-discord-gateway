@@ -190,6 +190,9 @@ export async function invokeAgent(
   return new Promise<AgentResult>((resolve, reject) => {
     // Own process group (POSIX): timeout/abort must take down the whole tree —
     // pi's bash grandchildren would otherwise survive a lone proc.kill().
+    // ponytail ceiling: a SIGKILL of the gateway itself can orphan this group
+    // until pi's next stdout write fails (EPIPE). Full fix = the runProcess
+    // supervisor IPC, which does not support JSONL streaming yet.
     const proc = spawn(effectiveBin, effectiveArgs, {
       cwd: effectiveCwd,
       env: sanitizedChildEnv(),

@@ -25,7 +25,7 @@ import {
 } from '../db.js';
 import { invokeAgent } from './invoke.js';
 import { sendResponse, sendDurableResponse, setTyping } from '../discord/client.js';
-import { splitResponse } from '../discord/delivery.js';
+import { splitMessage } from '../discord/delivery.js';
 import { routeQueuedMessage } from '../discord/threads.js';
 import type { QueuedMessage } from '../types.js';
 import {
@@ -388,7 +388,7 @@ async function processMessage(
       // Persist the answer before sending (README: answers are saved before
       // delivery): a restart resumes unsent chunks without rerunning pi, and
       // `piscord result <task-id>` can always read the saved text.
-      saveResponse(rowid, result.text, splitResponse(result.text));
+      saveResponse(rowid, result.text, splitMessage(result.text, 2000));
       const sent = await sendDurableResponse(rowid, signal);
       if (!sent) {
         if (signal.aborted) {

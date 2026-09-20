@@ -39,6 +39,8 @@ if (prompt.includes('BLOCK')) {
   fs.writeFileSync('child-pid', String(process.pid));
   process.on('SIGTERM', () => {});
   setInterval(() => {}, 1000);
+} else if (prompt.includes('FENCE')) {
+  console.log('FENCED-ANSWER' + '\\n' + '\\u0060\\u0060\\u0060js' + '\\n' + 'const x = 1;\\n'.repeat(700) + '\\u0060\\u0060\\u0060');
 } else { console.log(prompt.includes('LONG') ? 'a'.repeat(4200) : 'answer'); }
 `,
   );
@@ -176,6 +178,27 @@ describe('queue with real processes and durable SQLite', () => {
     expect(state.send.mock.calls.map((call) => call[1].length)).toEqual([2000, 2000, 2000, 200]);
     expect(db.getResponseChunks(id).every((chunk) => chunk.status === 'sent')).toBe(true);
     expect(readFileSync(join(directory, 'calls'), 'utf8').match(/LONG/g)).toHaveLength(1);
+  });
+  it('splits long fenced answers into fence-balanced durable chunks', async () => {
+    const id = enqueue('FENCE');
+    state.send.mockReset().mockResolvedValue('discord-id');
+    queue.startProcessingLoop();
+    await status(id, 'done');
+    const chunks = db.getResponseChunks(id).map((chunk) => chunk.content);
+    expect(chunks.length).toBeGreaterThan(1);
+    // Every chunk opens and closes its fences: no mid-block cut in Discord.
+    for (const content of chunks) {
+      const fences = content.match(/^```.*$/gm) ?? [];
+      expect(fences.length % 2).toBe(0);
+      expect(content.length).toBeLessThanOrEqual(2000);
+    }
+    // The reopened fences only ADD delimiters — the payload survives whole.
+    expect(
+      chunks
+        .join('')
+        .replace(/^```(js)?\n/gm, '')
+        .replaceAll('\n```', ''),
+    ).toContain('FENCED-ANSWER');
   });
   it('routes a thread-starter through its thread instead of the parent session', async () => {
     const { setThreadTransport } = await import('../src/discord/threads.js');
