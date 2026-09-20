@@ -16,6 +16,7 @@ vi.mock('../src/agent/invoke.js', () => ({
 
 vi.mock('../src/discord/client.js', () => ({
   sendResponse: sendResponseMock,
+  sendDurableResponse: async () => true,
   setTyping: setTypingMock,
   fetchChannel: fetchChannelMock,
 }));
@@ -49,12 +50,12 @@ afterEach(() => {
 });
 
 /**
- * A turn killed by a gateway shutdown must stay recoverable: the queue row
- * stays 'processing' so recoverStuckMessagesWithBudget() at the next boot re-enqueues
- * it and the answer is regenerated and delivered without user action.
+ * A turn killed by a gateway shutdown stays 'processing'; the next boot's
+ * recoverStuckMessages() parks it as interrupted with a notice — reported,
+ * never silently rerun (README restart table).
  */
 describe('killed message recovery', () => {
-  it('keeps a killed message in a state boot recovery can re-enqueue', async () => {
+  it('leaves a killed message for boot recovery to park as interrupted', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'pidg-queue-killed-'));
     tempDirs.push(tempDir);
 
@@ -90,7 +91,7 @@ describe('killed message recovery', () => {
         thinkingOverride: '',
         cwdOverride: '',
       });
-      db.enqueueMessage({
+      const id = db.enqueueMessage({
         channelJid: 'dc:123',
         sender: 'u_1',
         senderName: 'Alice',
@@ -114,9 +115,15 @@ describe('killed message recovery', () => {
       );
 
       // No answer was delivered (nothing to deliver), and the row must NOT
-      // be 'failed': the next boot's recoverStuckMessagesWithBudget() has to pick it up.
+      // be 'failed': boot recovery has to pick it up — as interrupted.
       expect(sendResponseMock).not.toHaveBeenCalled();
-      expect(db.recoverStuckMessagesWithBudget(3).recovered).toBe(1);
+      expect(db.getQueuedMessage(id)?.status).toBe('processing');
+      const result = db.recoverStuckMessages();
+      expect(result.interrupted).toBe(1);
+      expect(result.recovered).toBe(0);
+      const parked = db.getQueuedMessage(id)!;
+      expect(parked.status).toBe('interrupted');
+      expect(parked.notice_text).toContain(`Task #${id}`);
     } finally {
       queue.stopProcessingLoop({ timeoutMs: 0 });
     }
@@ -160,7 +167,7 @@ describe('killed message recovery', () => {
         thinkingOverride: '',
         cwdOverride: '',
       });
-      db.enqueueMessage({
+      const id = db.enqueueMessage({
         channelJid: 'dc:123',
         sender: 'u_1',
         senderName: 'Alice',
@@ -190,7 +197,10 @@ describe('killed message recovery', () => {
       );
 
       // The stopped task must NOT come back at the next boot.
-      expect(db.recoverStuckMessagesWithBudget(3).recovered).toBe(0);
+      const result = db.recoverStuckMessages();
+      expect(result.recovered).toBe(0);
+      expect(result.interrupted).toBe(0);
+      expect(db.getQueuedMessage(id)?.status).toBe('failed');
     } finally {
       queue.stopProcessingLoop({ timeoutMs: 0 });
     }
@@ -227,7 +237,7 @@ describe('killed message recovery', () => {
         thinkingOverride: '',
         cwdOverride: '',
       });
-      db.enqueueMessage({
+      const id = db.enqueueMessage({
         channelJid: 'dc:123',
         sender: 'u_1',
         senderName: 'Alice',
@@ -235,10 +245,12 @@ describe('killed message recovery', () => {
         timestamp: new Date().toISOString(),
       });
 
-      // Burn the attempt budget: three claim cycles with reboots between.
+      // Burn the attempt budget: three claim cycles with the row handed back
+      // between them (the queue itself never replays an interrupted row).
       for (let i = 0; i < 3; i++) {
-        expect(db.claimNextMessage('dc:123')?.attempts).toBe(i + 1);
-        if (i < 2) db.recoverStuckMessagesWithBudget(3);
+        const claimed = db.claimNextMessage('dc:123');
+        expect(claimed?.attempts).toBe(i + 1);
+        if (i < 2) db.setMessageState(id, 'pending');
       }
       // Row is 'processing' with attempts = 3 → the next boot abandons it.
 
@@ -253,6 +265,7 @@ describe('killed message recovery', () => {
       const [jid, notice] = sendResponseMock.mock.calls[0];
       expect(jid).toBe('dc:123');
       expect(String(notice)).toMatch(/discarded/i);
+      expect(db.getQueuedMessage(id)?.status).toBe('failed');
     } finally {
       queue.stopProcessingLoop({ timeoutMs: 0 });
     }

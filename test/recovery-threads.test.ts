@@ -109,7 +109,11 @@ describe('durable recovery', () => {
     const pending = enqueue();
     db.closeDb();
     db.initDb();
-    expect(db.recoverStuckMessages()).toBe(1);
+    expect(db.recoverStuckMessages()).toMatchObject({
+      recovered: 0,
+      interrupted: 1,
+      abandoned: 0,
+    });
     expect(db.getQueuedMessage(interrupted)?.status).toBe('interrupted');
     expect(db.getQueuedMessage(delivery)).toMatchObject({
       status: 'delivering',
@@ -118,7 +122,7 @@ describe('durable recovery', () => {
     expect(db.getQueuedMessage(cancelled)?.status).toBe('cancelled');
     expect(db.getQueuedMessage(pending)?.status).toBe('pending');
     expect(db.pendingNotices()).toHaveLength(1);
-    expect(db.recoverStuckMessages()).toBe(0);
+    expect(db.recoverStuckMessages().interrupted).toBe(0);
   });
   it('resumes only unsent answer chunks after reopening the database', async () => {
     const { deliverResponse } = await import('../src/discord/delivery.js');

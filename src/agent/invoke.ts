@@ -60,13 +60,24 @@ export function createJsonLineReader(onLine: (line: string) => void): {
 } {
   const decoder = new StringDecoder('utf-8');
   let lineBuf = '';
+  // ponytail: a JSONL line longer than this is dropped (flagged, skipped at
+  // the next newline) instead of growing RAM forever. Real pi events stay far
+  // below it; if one ever exceeds it, that event is lost from the live log —
+  // the delivered answer is unaffected (it comes from the session, not stdout).
+  const LINE_MAX_CHARS = 2 * 1024 * 1024;
+  let overflowed = false;
 
   const drain = () => {
     let newlineIndex = lineBuf.indexOf('\n');
     while (newlineIndex !== -1) {
       const line = lineBuf.slice(0, newlineIndex).trim();
       lineBuf = lineBuf.slice(newlineIndex + 1);
-      if (line) onLine(line);
+      if (overflowed) {
+        // Rest of an oversized line: discard it whole.
+        overflowed = false;
+      } else if (line) {
+        onLine(line);
+      }
       newlineIndex = lineBuf.indexOf('\n');
     }
   };
@@ -75,15 +86,20 @@ export function createJsonLineReader(onLine: (line: string) => void): {
     push: (chunk: Buffer) => {
       lineBuf += decoder.write(chunk);
       drain();
+      if (lineBuf.length > LINE_MAX_CHARS) {
+        overflowed = true;
+        lineBuf = '';
+      }
     },
     end: () => {
       lineBuf += decoder.end();
-      if (lineBuf.trim()) {
-        drain();
+      drain();
+      if (!overflowed && lineBuf.trim()) {
         const trailing = lineBuf.trim();
         if (trailing) onLine(trailing);
-        lineBuf = '';
       }
+      lineBuf = '';
+      overflowed = false;
     },
   };
 }
@@ -172,10 +188,13 @@ export async function invokeAgent(
   );
 
   return new Promise<AgentResult>((resolve, reject) => {
+    // Own process group (POSIX): timeout/abort must take down the whole tree —
+    // pi's bash grandchildren would otherwise survive a lone proc.kill().
     const proc = spawn(effectiveBin, effectiveArgs, {
       cwd: effectiveCwd,
       env: sanitizedChildEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
     });
 
     // Streaming mode keeps only the JSONL event stream; plain mode buffers stdout.
@@ -227,12 +246,29 @@ export async function invokeAgent(
       if (escalationTimer) clearTimeout(escalationTimer);
       escalationTimer = undefined;
     };
+    const killTree = (signal: NodeJS.Signals) => {
+      if (!proc.pid) return;
+      try {
+        process.kill(-proc.pid, signal);
+      } catch (err: any) {
+        // Group already gone (ESRCH): nothing to signal. Anything else
+        // (e.g. EPERM on a setuid grandchild): fall back to pi alone.
+        if (err?.code !== 'ESRCH') proc.kill(signal);
+      }
+    };
     const killProc = () => {
       if (process.platform === 'win32') {
         proc.kill();
+        // Tree kill on Windows: taskkill /T walks pi's children too.
+        const killer = spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], {
+          stdio: 'ignore',
+          windowsHide: true,
+        });
+        killer.on('error', () => undefined);
       } else {
-        proc.kill('SIGTERM');
-        escalationTimer = setTimeout(() => proc.kill('SIGKILL'), 5000);
+        // Negative pid = the whole process group (see detached above).
+        killTree('SIGTERM');
+        escalationTimer = setTimeout(() => killTree('SIGKILL'), 5000);
       }
       // Grandchildren (e.g. `sleep` under sh) inherit the stdio pipes and keep
       // them open, delaying the 'close' event long after the kill. Destroying
@@ -279,6 +315,7 @@ export async function invokeAgent(
           text: '',
           error: `Agent invocation timed out after ${config.agentTimeoutMs}ms`,
           timedOut: true,
+          reason: 'timeout',
         });
         return;
       }
@@ -294,6 +331,7 @@ export async function invokeAgent(
           text: '',
           error: stderr.slice(0, 600) || `pi exited with code ${code}`,
           killed,
+          reason: killed ? 'cancelled' : undefined,
         });
         return;
       }

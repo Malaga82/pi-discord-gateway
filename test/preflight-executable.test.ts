@@ -17,7 +17,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(directory, { recursive: true, force: true }));
 describe('configured pi executable preflight', () => {
-  it.each(['0.83.0', '0.84.2', '0.85.1'])(
+  it.each(['0.83.0', '0.84.2', '0.85.1', '0.86.0'])(
     'accepts supported CLI %s independently of installed peers',
     async (version) => {
       writeFileSync(
@@ -27,7 +27,7 @@ describe('configured pi executable preflight', () => {
       expect(await checkPiExecutable('configured-pi', directory)).toBe(version);
     },
   );
-  it.each(['0.74.0', '0.86.0', 'not a version'])(
+  it.each(['0.74.0', '0.87.0', 'not a version'])(
     'rejects CLI %s even with supported SDK packages',
     async (version) => {
       checkPiDependencies();

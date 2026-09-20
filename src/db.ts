@@ -9,6 +9,21 @@ import { type RegisteredChannel, type QueuedMessage, type ThinkingLevel } from '
 let db!: Database.Database;
 let dbOpen = false;
 
+// 1.8.4 regression restored: prepare() is cheap but not free, and the 1 Hz
+// poll (channelsWithPending + claimNextMessage + logMessage) recompiled the
+// same SQL every second. Statements are bound to one db handle, so the cache
+// is cleared in closeDb() before the handle dies.
+const statementCache = new Map<string, Database.Statement>();
+
+function stmt(sql: string): Database.Statement {
+  let cached = statementCache.get(sql);
+  if (!cached) {
+    cached = db.prepare(sql);
+    statementCache.set(sql, cached);
+  }
+  return cached;
+}
+
 export type ScheduledTaskType = 'once' | 'recurring';
 
 export interface ScheduledTaskRow {
@@ -131,7 +146,7 @@ export function initDb(): void {
 }
 
 function ensureTableColumn(table: string, column: string, ddl: string): void {
-  const rows = db.prepare(`pragma table_info(${table})`).all() as Array<{ name: string }>;
+  const rows = stmt(`pragma table_info(${table})`).all() as Array<{ name: string }>;
   if (rows.some((row) => row.name === column)) return;
   db.exec(`alter table ${table} add column ${column} ${ddl}`);
   logger.info({ table, column }, 'Database migrated: added column');
@@ -153,7 +168,7 @@ function normalizeTimestamp(timestamp: string | null): string | null {
 // ── Channel registration ──
 
 export function registerChannel(ch: RegisteredChannel): void {
-  db.prepare(
+  stmt(
     `
     insert into channels (jid, name, folder, requires_trigger, is_main, model_override, thinking_override, cwd_override, parent_jid, thread_mode, managed_thread)
     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -186,17 +201,17 @@ export function registerChannel(ch: RegisteredChannel): void {
 }
 
 export function unregisterChannel(jid: string): boolean {
-  const result = db.prepare('delete from channels where jid = ?').run(jid);
+  const result = stmt('delete from channels where jid = ?').run(jid);
   return result.changes > 0;
 }
 
 export function getChannel(jid: string): RegisteredChannel | undefined {
-  const row = db.prepare('select * from channels where jid = ?').get(jid) as any;
+  const row = stmt('select * from channels where jid = ?').get(jid) as any;
   return row ? rowToChannel(row) : undefined;
 }
 
 export function getAllChannels(): RegisteredChannel[] {
-  const rows = db.prepare('select * from channels order by created_at').all() as any[];
+  const rows = stmt('select * from channels order by created_at').all() as any[];
   return rows.map(rowToChannel);
 }
 
@@ -218,26 +233,28 @@ export function createDmChannel(
 }
 
 export function setChannelModelOverride(jid: string, modelOverride: string): boolean {
-  const result = db
-    .prepare('update channels set model_override = ? where jid = ?')
-    .run(modelOverride.trim(), jid);
+  const result = stmt('update channels set model_override = ? where jid = ?').run(
+    modelOverride.trim(),
+    jid,
+  );
   return result.changes > 0;
 }
 
 export function clearChannelModelOverride(jid: string): boolean {
-  const result = db.prepare("update channels set model_override = '' where jid = ?").run(jid);
+  const result = stmt("update channels set model_override = '' where jid = ?").run(jid);
   return result.changes > 0;
 }
 
 export function setChannelThinkingOverride(jid: string, thinkingOverride: ThinkingLevel): boolean {
-  const result = db
-    .prepare('update channels set thinking_override = ? where jid = ?')
-    .run(thinkingOverride, jid);
+  const result = stmt('update channels set thinking_override = ? where jid = ?').run(
+    thinkingOverride,
+    jid,
+  );
   return result.changes > 0;
 }
 
 export function clearChannelThinkingOverride(jid: string): boolean {
-  const result = db.prepare("update channels set thinking_override = '' where jid = ?").run(jid);
+  const result = stmt("update channels set thinking_override = '' where jid = ?").run(jid);
   return result.changes > 0;
 }
 
@@ -270,37 +287,34 @@ export function enqueueMessage(msg: {
   sourceMessageId?: string;
   routeThread?: boolean;
 }): number {
-  const result = db
-    .prepare(
-      `
+  const result = stmt(
+    `
     insert into message_queue (channel_jid, sender, sender_name, content, timestamp, attachments, source_message_id, origin_jid, route_thread)
     values (?, ?, ?, ?, ?, ?, ?, ?, ?)
     on conflict(source_message_id) where source_message_id is not null do nothing
   `,
-    )
-    .run(
-      msg.channelJid,
-      msg.sender,
-      msg.senderName,
-      msg.content,
-      msg.timestamp,
-      msg.attachments ?? null,
-      msg.sourceMessageId ?? null,
-      msg.channelJid,
-      (msg.routeThread ?? getChannel(msg.channelJid)?.threadMode === 'auto') ? 1 : 0,
-    );
+  ).run(
+    msg.channelJid,
+    msg.sender,
+    msg.senderName,
+    msg.content,
+    msg.timestamp,
+    msg.attachments ?? null,
+    msg.sourceMessageId ?? null,
+    msg.channelJid,
+    (msg.routeThread ?? getChannel(msg.channelJid)?.threadMode === 'auto') ? 1 : 0,
+  );
   return result.changes ? Number(result.lastInsertRowid) : 0;
 }
 
 export function getQueuedMessage(rowid: number): QueuedMessage | undefined {
-  return db.prepare('select * from message_queue where rowid = ?').get(rowid) as
+  return stmt('select * from message_queue where rowid = ?').get(rowid) as
     | QueuedMessage
     | undefined;
 }
 export function claimNextMessage(channelJid: string): QueuedMessage | undefined {
-  return db
-    .prepare(
-      `
+  return stmt(
+    `
     update message_queue set status = case when status = 'pending' then
       case when route_thread = 1 then 'routing' else 'processing' end else status end,
       attempts = attempts + 1
@@ -312,11 +326,10 @@ export function claimNextMessage(channelJid: string): QueuedMessage | undefined 
         and 'dc:' || coalesce(routing.source_message_id, routing.anchor_message_id) = message_queue.channel_jid)
     returning *
   `,
-    )
-    .get(channelJid, Date.now()) as QueuedMessage | undefined;
+  ).get(channelJid, Date.now()) as QueuedMessage | undefined;
 }
 export function markMessageDone(rowid: number): void {
-  db.prepare(
+  stmt(
     "update message_queue set status = 'done', processed_at = datetime('now') where rowid = ?",
   ).run(rowid);
 }
@@ -328,69 +341,61 @@ export function setMessageState(
   status: QueuedMessage['status'],
   notice?: string,
 ): void {
-  db.prepare(
+  stmt(
     "update message_queue set status = ?, notice_text = coalesce(?, notice_text), processed_at = datetime('now') where rowid = ?",
   ).run(status, notice ?? null, rowid);
 }
 export function clearPendingMessages(channelJid: string): number {
-  return db
-    .prepare(
-      "update message_queue set status = 'cancelled', processed_at = datetime('now') where (channel_jid = ? and status in ('pending', 'routing', 'delivering')) or (status = 'routing' and 'dc:' || coalesce(source_message_id, anchor_message_id) = ?)",
-    )
-    .run(channelJid, channelJid).changes;
+  return stmt(
+    "update message_queue set status = 'cancelled', processed_at = datetime('now') where (channel_jid = ? and status in ('pending', 'routing', 'delivering')) or (status = 'routing' and 'dc:' || coalesce(source_message_id, anchor_message_id) = ?)",
+  ).run(channelJid, channelJid).changes;
 }
-export function recoverStuckMessages(): number {
-  return db.transaction(() => {
-    // Routing has not invoked pi yet. Its persisted source/anchor makes retry safe.
-    db.prepare("update message_queue set status = 'pending' where status = 'routing'").run();
-    return db
-      .prepare(
-        `update message_queue set status = 'interrupted', notice_text =
-      'The gateway restarted during this task. Some operations may have completed. Check the result before submitting it again.'
-      where status = 'processing'`,
-      )
-      .run().changes;
-  })();
-}
-
-/** Fork variant: rows over the attempt budget die as failed (a prompt that
- * kills pi on every retry must not wedge the gateway on boot forever);
- * the rest are returned to pending. Upstream recoverStuckMessages() uses the
- * 'interrupted' notice model instead — kept for the durable-delivery path. */
-export function recoverStuckMessagesWithBudget(maxAttempts: number): {
+export function recoverStuckMessages(): {
   recovered: number;
+  interrupted: number;
   abandoned: number;
   abandonedByChannel: Array<{ jid: string; count: number }>;
 } {
-  const abandonedRows = db
-    .prepare(
+  return db.transaction(() => {
+    // Routing has not invoked pi yet. Its persisted source/anchor makes retry safe.
+    const recovered = stmt(
+      "update message_queue set status = 'pending' where status = 'routing'",
+    ).run().changes;
+    // Crash-loop ceiling: a row that already burned its attempt budget dies as
+    // failed instead of being parked. Unreachable through the queue alone
+    // (interrupted rows never re-claim) — it guards manual DB surgery and any
+    // future replay path.
+    const abandonedRows = stmt(
       `update message_queue set status = 'failed', processed_at = datetime('now')
      where status = 'processing' and attempts >= ?
      returning channel_jid`,
-    )
-    .all(maxAttempts) as Array<{ channel_jid: string }>;
-  const recovered = db
-    .prepare("update message_queue set status = 'pending' where status = 'processing'")
-    .run().changes;
-  const counts = new Map<string, number>();
-  for (const row of abandonedRows) {
-    counts.set(row.channel_jid, (counts.get(row.channel_jid) ?? 0) + 1);
-  }
-  return {
-    recovered,
-    abandoned: abandonedRows.length,
-    abandonedByChannel: [...counts].map(([jid, count]) => ({ jid, count })),
-  };
+    ).all(config.maxMessageAttempts) as Array<{ channel_jid: string }>;
+    // Execution started, result unknown: report, never rerun (README restart
+    // table). The notice carries the task id so `piscord result` stays usable.
+    const interrupted = stmt(
+      `update message_queue set status = 'interrupted', notice_text =
+      'Task #' || rowid || ': the gateway restarted during this task. Some operations may have completed. Check the result before submitting it again.'
+      where status = 'processing'`,
+    ).run().changes;
+    const counts = new Map<string, number>();
+    for (const row of abandonedRows) {
+      counts.set(row.channel_jid, (counts.get(row.channel_jid) ?? 0) + 1);
+    }
+    return {
+      recovered,
+      interrupted,
+      abandoned: abandonedRows.length,
+      abandonedByChannel: [...counts].map(([jid, count]) => ({ jid, count })),
+    };
+  })();
 }
 
 export function channelsWithPending(): string[] {
   return (
-    db
-      .prepare(
-        `select channel_jid from message_queue where status in ('pending', 'delivering')
+    stmt(
+      `select channel_jid from message_queue where status in ('pending', 'delivering')
     group by channel_jid order by min(rowid)`,
-      )
-      .all() as Array<{ channel_jid: string }>
+    ).all() as Array<{ channel_jid: string }>
   ).map((row) => row.channel_jid);
 }
 export function pendingNotices(): Array<{
@@ -398,17 +403,15 @@ export function pendingNotices(): Array<{
   channel_jid: string;
   notice_text: string;
 }> {
-  return db
-    .prepare(
-      'select rowid, channel_jid, notice_text from message_queue where notice_text is not null and notice_sent = 0 and notice_next_attempt_at <= ? order by rowid limit 20',
-    )
-    .all(Date.now()) as Array<{ rowid: number; channel_jid: string; notice_text: string }>;
+  return stmt(
+    'select rowid, channel_jid, notice_text from message_queue where notice_text is not null and notice_sent = 0 and notice_next_attempt_at <= ? order by rowid limit 20',
+  ).all(Date.now()) as Array<{ rowid: number; channel_jid: string; notice_text: string }>;
 }
 export function markNoticeSent(rowid: number): void {
-  db.prepare('update message_queue set notice_sent = 1 where rowid = ?').run(rowid);
+  stmt('update message_queue set notice_sent = 1 where rowid = ?').run(rowid);
 }
 export function postponeNotice(rowid: number): void {
-  db.prepare('update message_queue set notice_next_attempt_at = ? where rowid = ?').run(
+  stmt('update message_queue set notice_next_attempt_at = ? where rowid = ?').run(
     Date.now() + 300_000,
     rowid,
   );
@@ -425,101 +428,94 @@ export interface ResponseChunk {
 }
 export function saveResponse(rowid: number, text: string, chunks: string[]): void {
   db.transaction(() => {
-    const updated = db
-      .prepare(
-        "update message_queue set response_text = ?, status = 'delivering' where rowid = ? and status = 'processing'",
-      )
-      .run(text, rowid);
+    const updated = stmt(
+      "update message_queue set response_text = ?, status = 'delivering' where rowid = ? and status = 'processing'",
+    ).run(text, rowid);
     if (!updated.changes) return;
     for (const [index, content] of chunks.entries()) {
-      db.prepare(
-        'insert into response_chunks (queue_id, part, content, nonce) values (?, ?, ?, ?)',
-      ).run(rowid, index, content, randomUUID().replaceAll('-', '').slice(0, 24));
+      stmt('insert into response_chunks (queue_id, part, content, nonce) values (?, ?, ?, ?)').run(
+        rowid,
+        index,
+        content,
+        randomUUID().replaceAll('-', '').slice(0, 24),
+      );
     }
   })();
 }
 export function getResponseChunks(rowid: number): ResponseChunk[] {
-  return db
-    .prepare('select * from response_chunks where queue_id = ? order by part')
-    .all(rowid) as ResponseChunk[];
+  return stmt('select * from response_chunks where queue_id = ? order by part').all(
+    rowid,
+  ) as ResponseChunk[];
 }
 export function beginChunk(rowid: number, part: number): void {
-  db.prepare(
+  stmt(
     "update response_chunks set status = 'sending', sending_at = coalesce(sending_at, ?) where queue_id = ? and part = ?",
   ).run(Date.now(), rowid, part);
 }
 export function finishChunk(rowid: number, part: number, messageId: string): void {
   db.transaction(() => {
-    db.prepare(
+    stmt(
       "update response_chunks set status = 'sent', discord_message_id = ? where queue_id = ? and part = ?",
     ).run(messageId, rowid, part);
-    db.prepare(
-      'update message_queue set delivery_attempts = 0, next_attempt_at = 0 where rowid = ?',
-    ).run(rowid);
+    stmt('update message_queue set delivery_attempts = 0, next_attempt_at = 0 where rowid = ?').run(
+      rowid,
+    );
   })();
 }
 export function retryDelivery(rowid: number, delayMs = 5_000): void {
-  db.prepare(
+  stmt(
     "update message_queue set delivery_attempts = delivery_attempts + 1, next_attempt_at = ? where rowid = ? and status = 'delivering'",
   ).run(Date.now() + delayMs, rowid);
 }
 export function resetUnsentChunk(rowid: number, part: number): void {
-  db.prepare(
+  stmt(
     "update response_chunks set status = 'pending', sending_at = null where queue_id = ? and part = ? and status = 'sending'",
   ).run(rowid, part);
 }
 export function setChannelThreadMode(jid: string, mode: 'off' | 'auto'): void {
-  db.prepare('update channels set thread_mode = ? where jid = ?').run(mode, jid);
+  stmt('update channels set thread_mode = ? where jid = ?').run(mode, jid);
 }
 export function attachThreadParent(jid: string, parentJid: string): void {
-  db.prepare("update channels set parent_jid = ? where jid = ? and parent_jid = ''").run(
-    parentJid,
-    jid,
-  );
+  stmt("update channels set parent_jid = ? where jid = ? and parent_jid = ''").run(parentJid, jid);
 }
 export function isRoutingThread(id: string): boolean {
   return Boolean(
-    db
-      .prepare(
-        "select rowid from message_queue where route_thread = 1 and status in ('pending', 'routing') and (source_message_id = ? or anchor_message_id = ?) limit 1",
-      )
-      .get(id, id),
+    stmt(
+      "select rowid from message_queue where route_thread = 1 and status in ('pending', 'routing') and (source_message_id = ? or anchor_message_id = ?) limit 1",
+    ).get(id, id),
   );
 }
 export function routingAnchor(rowid: number): { nonce: string; sendingAt: number } {
-  db.prepare(
+  stmt(
     'update message_queue set anchor_nonce = coalesce(anchor_nonce, ?), anchor_sending_at = case when anchor_sending_at = 0 then ? else anchor_sending_at end where rowid = ?',
   ).run(randomUUID().replaceAll('-', '').slice(0, 24), Date.now(), rowid);
-  const row = db
-    .prepare('select anchor_nonce, anchor_sending_at from message_queue where rowid = ?')
-    .get(rowid) as { anchor_nonce: string; anchor_sending_at: number };
+  const row = stmt('select anchor_nonce, anchor_sending_at from message_queue where rowid = ?').get(
+    rowid,
+  ) as { anchor_nonce: string; anchor_sending_at: number };
   return { nonce: row.anchor_nonce, sendingAt: row.anchor_sending_at };
 }
 export function setRoutingAnchor(rowid: number, messageId: string): void {
-  db.prepare('update message_queue set anchor_message_id = ? where rowid = ?').run(
-    messageId,
-    rowid,
-  );
+  stmt('update message_queue set anchor_message_id = ? where rowid = ?').run(messageId, rowid);
 }
 export function routeMessageToThread(rowid: number, thread: RegisteredChannel): void {
   db.transaction(() => {
     registerChannel(thread);
-    db.prepare(
+    stmt(
       "update message_queue set channel_jid = ?, route_thread = 0, status = 'pending' where rowid = ? and status = 'routing'",
     ).run(thread.jid, rowid);
   })();
 }
 export function markThreadDeleted(jid: string): void {
   db.transaction(() => {
-    db.prepare(
+    stmt(
       "update channels set deleted_at = coalesce(deleted_at, datetime('now')) where jid = ?",
     ).run(jid);
     clearPendingMessages(jid);
-    db.prepare('update scheduled_tasks set enabled = 0 where channel_jid = ?').run(jid);
+    stmt('update scheduled_tasks set enabled = 0 where channel_jid = ?').run(jid);
   })();
 }
 export function removeDeletedThread(jid: string): void {
-  db.prepare('delete from channels where jid = ? and deleted_at is not null').run(jid);
+  stmt('delete from channels where jid = ? and deleted_at is not null').run(jid);
 }
 
 // ── Scheduled tasks ──
@@ -533,57 +529,52 @@ export function addScheduledTask(task: {
   createdBy?: string;
   nextRunAt: string;
 }): number {
-  const result = db
-    .prepare(
-      `
+  const result = stmt(
+    `
     insert into scheduled_tasks (name, type, schedule, channel_jid, prompt, created_by, next_run_at)
     values (?, ?, ?, ?, ?, ?, ?)
   `,
-    )
-    .run(
-      task.name,
-      task.type,
-      task.schedule,
-      task.channelJid,
-      task.prompt,
-      task.createdBy ?? '',
-      normalizeTimestamp(task.nextRunAt),
-    );
+  ).run(
+    task.name,
+    task.type,
+    task.schedule,
+    task.channelJid,
+    task.prompt,
+    task.createdBy ?? '',
+    normalizeTimestamp(task.nextRunAt),
+  );
 
   return Number(result.lastInsertRowid);
 }
 
 export function removeScheduledTask(id: number): boolean {
-  const result = db.prepare('delete from scheduled_tasks where id = ?').run(id);
+  const result = stmt('delete from scheduled_tasks where id = ?').run(id);
   return result.changes > 0;
 }
 
 export function enableScheduledTask(id: number): boolean {
-  const result = db.prepare('update scheduled_tasks set enabled = 1 where id = ?').run(id);
+  const result = stmt('update scheduled_tasks set enabled = 1 where id = ?').run(id);
   return result.changes > 0;
 }
 
 export function disableScheduledTask(id: number): boolean {
-  const result = db.prepare('update scheduled_tasks set enabled = 0 where id = ?').run(id);
+  const result = stmt('update scheduled_tasks set enabled = 0 where id = ?').run(id);
   return result.changes > 0;
 }
 
 export function listScheduledTasks(): ScheduledTaskRow[] {
-  return db
-    .prepare(
-      `
+  return stmt(
+    `
     select id, name, type, schedule, channel_jid, prompt, enabled, last_run_at, next_run_at, created_at, created_by
     from scheduled_tasks
     order by id asc
   `,
-    )
-    .all() as ScheduledTaskRow[];
+  ).all() as ScheduledTaskRow[];
 }
 
 export function getDueScheduledTasks(): ScheduledTaskRow[] {
-  return db
-    .prepare(
-      `
+  return stmt(
+    `
     select id, name, type, schedule, channel_jid, prompt, enabled, last_run_at, next_run_at, created_at, created_by
     from scheduled_tasks
     where enabled = 1
@@ -591,12 +582,11 @@ export function getDueScheduledTasks(): ScheduledTaskRow[] {
       and next_run_at <= datetime('now')
     order by next_run_at asc, id asc
   `,
-    )
-    .all() as ScheduledTaskRow[];
+  ).all() as ScheduledTaskRow[];
 }
 
 export function updateTaskAfterRun(id: number, lastRunAt: string, nextRunAt: string | null): void {
-  db.prepare(
+  stmt(
     `
     update scheduled_tasks
     set last_run_at = ?,
@@ -628,7 +618,7 @@ export function enqueueScheduledTask(
 // ── Message log ──
 
 export function logMessage(channelJid: string, role: string, content: string): void {
-  db.prepare('insert into message_log (channel_jid, role, content) values (?, ?, ?)').run(
+  stmt('insert into message_log (channel_jid, role, content) values (?, ?, ?)').run(
     channelJid,
     role,
     content,
@@ -637,6 +627,7 @@ export function logMessage(channelJid: string, role: string, content: string): v
 
 export function closeDb(): void {
   if (!dbOpen) return;
+  statementCache.clear();
   db.close();
   dbOpen = false;
 }
@@ -668,16 +659,14 @@ export async function purgeOldMessages(
   try {
     let queue = 0;
     for (;;) {
-      const deleted = db
-        .prepare(
-          `delete from message_queue where rowid in (
+      const deleted = stmt(
+        `delete from message_queue where rowid in (
            select rowid from message_queue
            where status in ('done', 'failed') and processed_at is not null
              and processed_at < datetime('now', ?)
            limit ${PURGE_BATCH}
          )`,
-        )
-        .run(cutoff).changes;
+      ).run(cutoff).changes;
       queue += deleted;
       if (deleted < PURGE_BATCH) break;
       await new Promise((r) => setImmediate(r));
@@ -685,15 +674,13 @@ export async function purgeOldMessages(
 
     let log = 0;
     for (;;) {
-      const deleted = db
-        .prepare(
-          `delete from message_log where rowid in (
+      const deleted = stmt(
+        `delete from message_log where rowid in (
            select rowid from message_log
            where timestamp < datetime('now', ?)
            limit ${PURGE_BATCH}
          )`,
-        )
-        .run(cutoff).changes;
+      ).run(cutoff).changes;
       log += deleted;
       if (deleted < PURGE_BATCH) break;
       await new Promise((r) => setImmediate(r));

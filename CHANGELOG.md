@@ -45,6 +45,27 @@ All notable changes to this project will be documented in this file.
 
 ## [1.8.5] - unreleased (fork)
 
+### Fixed
+
+- Queue wiring completed against upstream 2.0.0: `dispatch` now routes thread-starter messages (`route_thread=1`) through `routeQueuedMessage` before invoking pi — the turn runs in the thread's own session, not the parent's. A crash during routing no longer strands the row: boot recovery requeues `routing` rows (pi was never invoked).
+- Durable delivery is live: answers are saved (`saveResponse`) before sending and delivered through `deliverResponse` with per-chunk nonces. A restart resumes unsent chunks without rerunning pi; `piscord result <task-id>` reads the saved answer. `redeliverSavedResponse` handles retryable delivery failures via the existing `delivering`/`next_attempt_at` machinery.
+- Restart recovery now matches the documented semantics: rows whose execution started are parked as `interrupted` with a task-id notice (reported, never rerun); the attempt budget stays as a crash-loop ceiling that fails over-budget rows with a notice. `recoverStuckMessages()` replaced the budget-replay fork at boot.
+- Task notices (`interrupted`, `delivery_uncertain`, `delivery_failed`) are drained from the queue poll loop and sent to their channel with a 5-minute backoff — the subsystem was previously dead code.
+- pi invocations run in their own process group and timeout/abort kill the whole tree (SIGTERM → SIGKILL escalation; `taskkill /T /F` on Windows). Grandchildren no longer survive `/pi stop` and timeouts.
+
+### Security
+
+- `piscord setup` writes `config.env` with `0600` permissions again (1.8.4 regression: the file holds `DISCORD_BOT_TOKEN` and landed `0644` under a typical umask; existing files: run `chmod 600` manually).
+- The setup wizard preselects `allowlist` for the channel policy — Enter no longer opens the agent surface (shell, files, cwd) to every visible channel.
+- Activity-log redaction also covers the exotic key names that survive as bare JSON keys in tool arguments: `pat`, `cookie`, `session_id`, and `github_pat_`-prefixed tokens.
+
+### Performance
+
+- `better-sqlite3` statements are cached per SQL text again (1.8.4 regression: the 1 Hz poll recompiled `channelsWithPending`/`claimNextMessage`/`logMessage` on every tick). The cache is cleared in `closeDb()`.
+- Streamed answer text is capped in memory (`TEXT_CAP`, 64k chars) like thinking — a long turn no longer grows an unbounded string edited every 2 s.
+- The JSONL line reader drops lines over 2 MB instead of buffering them without bound.
+- Tool-argument previews use a bounded depth/entry/length serializer instead of `JSON.stringify` on arbitrarily large objects (one synchronous event-loop tick per huge tool call, removed).
+
 ### Changed
 
 - `engines.node` raised from `>=20.3` to `>=22.19.0`: the floor is imposed by the pi peer packages (`@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` both require Node >= 22.19); no gateway API needs 22 specifically.

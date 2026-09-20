@@ -41,7 +41,7 @@ That's it. The setup wizard checks prerequisites, asks for your Discord bot toke
 - **Channel access policy** — `open` (all channels), `open-trigger` (all channels, @mention required), or `allowlist` (manual registration only)
 - **SQLite message queue** — resumes pending work and saved answers; reports interrupted execution without replaying it
 - **Concurrency control** — per-channel serial processing + configurable global limit
-- **DM auto-registration** — direct messages work out of the box
+- **DM registration is opt-in** — direct messages are ignored until `AUTO_REGISTER_DMS=true` (a DM bypasses the channel policy, so the default stays closed)
 - **Discord slash commands** — `/pi status`, `/pi model`, `/pi thinking`, `/pi new`, `/pi stop`
 - **Live activity streaming** — while pi works, the bot edits a live message showing a Hermes-style activity log (tool calls, interstitial text) and optionally streamed response text (`STREAMING=tools|full|off`)
 - **Bot-to-bot communication** — whitelisted peer bots can trigger the agent via @mention, with a sliding-window loop guard (`ALLOW_BOT_PEERS`)
@@ -145,7 +145,7 @@ Answers are saved before sending. Temporary delivery failures have a bounded ret
 
 Only one gateway may own a database. A second instance exits with a diagnostic. After a crash, the lock can take 30 seconds to expire; an owner that is still alive is never displaced merely because its heartbeat is old. Use a local filesystem for the SQLite database and lock files.
 
-`AGENT_TIMEOUT_MS` sets a total pi invocation limit, with `0` (the default) preserving unlimited long tasks. Timeout and cancellation terminate the invocation and its owned subprocesses. Quiet stdout does not trigger a timeout. During shutdown, the gateway first allows `SHUTDOWN_TIMEOUT_MS` for active tasks, then aborts them and drains bounded process/delivery operations before closing the database.
+`AGENT_TIMEOUT_MS` sets a total pi invocation limit (default `1800000` = 30 minutes; `0` preserves unlimited long tasks). Timeout and cancellation terminate the invocation and its owned subprocesses. Quiet stdout does not trigger a timeout. During shutdown, the gateway first allows `SHUTDOWN_TIMEOUT_MS` for active tasks, then aborts them and drains bounded process/delivery operations before closing the database.
 
 Model discovery runs in the background and never delays a normal message for a catalog refresh. Autocomplete can briefly show an old list or no choices while loading. `/pi status` distinguishes loading, unavailable and stale catalogs. Explicit model changes wait for discovery and report unavailable discovery separately from a missing model.
 
@@ -256,6 +256,7 @@ Most users won't need to edit this file directly — `piscord setup` generates i
 | `MAX_SCHEDULED_CONCURRENCY`  | `5`                             | Max scheduled tasks enqueued per tick (execution is still serialized by `MAX_CONCURRENCY`)                                       |
 | `POLL_INTERVAL_MS`           | `1000`                          | Queue poll interval (ms)                                                                                                         |
 | `SHUTDOWN_TIMEOUT_MS`        | `15000`                         | Graceful shutdown timeout (ms)                                                                                                   |
+| `AGENT_TIMEOUT_MS`            | `1800000`                       | Total pi invocation limit in ms (`0` = unlimited)                                                                                |
 | `AUTO_REGISTER_DMS`          | `false`                         | Auto-register DM channels — `false`: DMs are ignored unless explicitly enabled (they bypass the channel policy)                  |
 | `ARCHIVE_RETENTION_DAYS`     | `30`                            | Days to keep archived sessions (0 = never clean)                                                                                 |
 | `MAX_ATTACHMENT_BYTES`       | `26214400`                      | Max size per attachment (0 = no limit)                                                                                           |

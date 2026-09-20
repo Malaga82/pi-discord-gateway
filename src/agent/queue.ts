@@ -16,10 +16,18 @@ import {
   markMessageFailed,
   logMessage,
   getChannel,
-  recoverStuckMessagesWithBudget,
+  getQueuedMessage,
+  recoverStuckMessages,
+  saveResponse,
+  pendingNotices,
+  markNoticeSent,
+  postponeNotice,
 } from '../db.js';
 import { invokeAgent } from './invoke.js';
-import { sendResponse, setTyping } from '../discord/client.js';
+import { sendResponse, sendDurableResponse, setTyping } from '../discord/client.js';
+import { splitResponse } from '../discord/delivery.js';
+import { routeQueuedMessage } from '../discord/threads.js';
+import type { QueuedMessage } from '../types.js';
 import {
   cancelStream,
   finalizeStream,
@@ -68,20 +76,17 @@ export function abortChannelTask(jid: string): { aborted: boolean; cleared: numb
   return { aborted, cleared };
 }
 
-/* ponytail: upstream 2.0.0 threads routing (claimNextMessage status 'routing'
- * + routeQueuedMessage) non agganciato: thread_mode default 'off' lo tiene
- * inerte; agganciare in queue.dispatch quando si attiva la feature. */
 export function startProcessingLoop(): void {
   if (running) return;
 
   running = true;
   stopPromise = null;
 
-  // Recover messages stuck in 'processing' from a previous crash; ones over
-  // the attempt budget die as failed (they keep killing pi — OOM prompts etc).
-  const { recovered, abandoned, abandonedByChannel } = recoverStuckMessagesWithBudget(
-    config.maxMessageAttempts,
-  );
+  // Restart recovery (README restart table): routing rows go back to pending
+  // (pi was never invoked), rows whose execution started are parked as
+  // interrupted with a notice — never silently rerun. Rows already over the
+  // attempt budget die as failed (crash-loop ceiling).
+  const { recovered, interrupted, abandoned, abandonedByChannel } = recoverStuckMessages();
   if (abandoned > 0) {
     logger.warn(
       { abandoned, maxAttempts: config.maxMessageAttempts },
@@ -98,8 +103,8 @@ export function startProcessingLoop(): void {
       `⚠️ ${subject} discarded after ${config.maxMessageAttempts} failed attempts (the agent process died on every retry). Please try again, possibly rephrasing or removing heavy attachments.`,
     ).catch(() => undefined);
   }
-  if (recovered > 0) {
-    logger.info({ count: recovered }, 'Recovered stuck messages');
+  if (recovered > 0 || interrupted > 0) {
+    logger.info({ recovered, interrupted }, 'Recovered stuck messages');
   }
 
   schedulePoll(0);
@@ -146,10 +151,26 @@ function poll(): void {
 
   try {
     dispatch();
+    drainNotices();
   } catch (err: any) {
     logger.error({ err: err.message }, 'Poll error');
   } finally {
     schedulePoll();
+  }
+}
+
+/** Deliver pending task notices (interrupted / delivery_uncertain / failed):
+ * the scrollback must tell the user what happened to their task. Best-effort
+ * with a 5-minute backoff on failure — pendingNotices() already bounds the
+ * batch to 20 and gates on notice_next_attempt_at. */
+function drainNotices(): void {
+  for (const notice of pendingNotices()) {
+    void sendResponse(notice.channel_jid, `⚠️ ${notice.notice_text}`)
+      .then((sent) => {
+        if (sent) markNoticeSent(notice.rowid);
+        else postponeNotice(notice.rowid);
+      })
+      .catch(() => postponeNotice(notice.rowid));
   }
 }
 
@@ -169,14 +190,7 @@ function dispatch(): void {
     activeChannelControllers.set(jid, controller);
     activeChannelRowids.set(jid, msg.rowid);
 
-    const taskPromise = processMessage(
-      jid,
-      msg.rowid,
-      msg.sender_name,
-      msg.content,
-      controller.signal,
-      msg.attachments,
-    ).finally(() => {
+    const taskPromise = runClaimedTask(jid, msg, controller.signal).finally(() => {
       activeChannels.delete(jid);
       activeTaskControllers.delete(msg.rowid);
       activeChannelControllers.delete(jid);
@@ -189,6 +203,72 @@ function dispatch(): void {
     });
 
     activeTaskPromises.add(taskPromise);
+  }
+}
+
+/** One claimed row, three shapes: a thread-starter to route (pi not yet
+ * invoked), a saved answer to resume delivering (pi must NOT run again), or a
+ * fresh turn to execute. */
+async function runClaimedTask(jid: string, msg: QueuedMessage, signal: AbortSignal): Promise<void> {
+  if (msg.status === 'routing') return routeClaimedMessage(jid, msg, signal);
+  if (msg.status === 'delivering') return redeliverSavedResponse(jid, msg.rowid, signal);
+  return processMessage(jid, msg.rowid, msg.sender_name, msg.content, signal, msg.attachments);
+}
+
+/** Open the conversation thread and requeue the row there. The next poll
+ * claims it on the thread channel with the thread's own session folder. */
+async function routeClaimedMessage(
+  jid: string,
+  msg: QueuedMessage,
+  signal: AbortSignal,
+): Promise<void> {
+  try {
+    await routeQueuedMessage(msg, signal);
+    logger.info({ jid, rowid: msg.rowid }, 'Message routed to its conversation thread');
+  } catch (err: any) {
+    if (signal.aborted) {
+      // Shutdown cut routing (the row keeps its 'routing' status for the next
+      // boot to requeue — pi was never invoked). A voluntary /pi stop has
+      // already marked the row failed before aborting; nothing to do either way.
+      logger.info({ jid, rowid: msg.rowid }, 'Routing abandoned: interrupted');
+      return;
+    }
+    markMessageFailed(msg.rowid);
+    logger.warn({ jid, rowid: msg.rowid, err: err.message }, 'Thread routing failed');
+    await sendResponse(
+      jid,
+      '⚠️ Could not open a thread for this message — details in the gateway logs.',
+    ).catch(() => undefined);
+  }
+}
+
+/** Resume delivery of a saved answer (crash/restart/rate-limit retry path).
+ * Chunks already sent are skipped; uncertain old sends stop with a notice. */
+async function redeliverSavedResponse(
+  jid: string,
+  rowid: number,
+  signal: AbortSignal,
+): Promise<void> {
+  const typingLoop = createTypingLoop(jid);
+  try {
+    const sent = await sendDurableResponse(rowid, signal);
+    if (sent) {
+      markMessageDone(rowid);
+      logger.info({ jid, rowid }, 'Saved answer delivered');
+      return;
+    }
+    if (signal.aborted) return; // stays 'delivering': resumed at next boot
+    const status = getQueuedMessage(rowid)?.status;
+    if (status === 'delivering') {
+      // Transient failure (rate limit / 5xx / network): retryDelivery already
+      // scheduled the next attempt via next_attempt_at.
+      logger.info({ jid, rowid }, 'Answer delivery postponed; will retry');
+      return;
+    }
+    // delivery_failed / delivery_uncertain / cancelled own their notices.
+    logger.warn({ jid, rowid, status }, 'Answer delivery stopped');
+  } finally {
+    await typingLoop.stop();
   }
 }
 
@@ -294,10 +374,10 @@ async function processMessage(
     });
 
     if (signal.aborted) {
-      // Shutdown interrupted processing: leave the row 'processing' so
-      // recoverStuckMessages() at the next boot re-enqueues it — the turn is
-      // regenerated and delivered without user action. Marking it failed here
-      // would silently drop the user's message.
+      // Shutdown interrupted processing: leave the row 'processing' so the
+      // next boot's recoverStuckMessages() parks it as interrupted with a
+      // notice — the user decides whether to submit again. Marking it failed
+      // here would silently drop the user's message.
       if (stream) await finalizeStream(stream, undefined); // preserve activity log
       logger.info({ jid, rowid }, 'Message abandoned: shutdown interrupted processing');
       return;
@@ -305,21 +385,28 @@ async function processMessage(
 
     if (result.ok) {
       if (stream) await finalizeStream(stream, result.text);
-      // Answer is always delivered as its own message(s) below the log.
-      const sent = await sendResponse(jid, result.text, signal);
+      // Persist the answer before sending (README: answers are saved before
+      // delivery): a restart resumes unsent chunks without rerunning pi, and
+      // `piscord result <task-id>` can always read the saved text.
+      saveResponse(rowid, result.text, splitResponse(result.text));
+      const sent = await sendDurableResponse(rowid, signal);
       if (!sent) {
         if (signal.aborted) {
-          // Shutdown cut the delivery mid-backoff: same recovery contract as
-          // above — the row stays 'processing' for the next boot.
-          // NOTE: chunks already delivered stay delivered, and the regenerated
-          // turn re-sends the whole response — early chunks can arrive twice.
-          // Accepted trade-off: complete-but-late beats truncated-forever;
-          // tracking delivered chunks would cost more than it is worth.
-          logger.info({ jid, rowid }, 'Delivery aborted by shutdown; message left recoverable');
+          // Shutdown cut delivery mid-chunk: the row stays 'delivering' with
+          // its chunks — the next boot (or retry tick) resumes exactly the
+          // unsent ones. No rerun, no duplicate chunks.
+          logger.info({ jid, rowid }, 'Delivery aborted by shutdown; saved answer left resumable');
           return;
         }
-        markMessageFailed(rowid);
-        logger.warn({ jid }, 'Agent response generated but could not be delivered to Discord');
+        const status = getQueuedMessage(rowid)?.status;
+        if (status === 'delivering') {
+          // Transient failure: retry scheduled via next_attempt_at.
+          logger.info({ jid, rowid }, 'Delivery postponed; will retry');
+          return;
+        }
+        // delivery_failed / delivery_uncertain / cancelled: terminal states
+        // set by deliverResponse, each with its own notice.
+        logger.warn({ jid, rowid, status }, 'Answer delivery stopped');
         return;
       }
 
@@ -335,9 +422,9 @@ async function processMessage(
     if (result.killed) {
       // pi was SIGTERM'd (gateway restart/stop): keep the activity log,
       // don't delete history and don't spam a ⚠️ error message.
-      // Leave the row 'processing': recoverStuckMessages() at the next boot
-      // re-enqueues it and the answer is regenerated (--continue keeps the
-      // session) — the reply reaches Discord without the user re-asking.
+      // Leave the row 'processing': the next boot's recoverStuckMessages()
+      // parks it as interrupted with a notice — the user decides whether to
+      // submit again; --continue keeps the session for that decision.
       if (stream) await finalizeStream(stream, undefined);
       logger.warn(
         { jid, rowid, error: result.error },

@@ -40,6 +40,17 @@ describe('createJsonLineReader (UTF-8 across chunk boundaries)', () => {
     reader.end();
     expect(lines).toEqual(['{"a":1}', '{"b":2}']);
   });
+
+  it('drops a JSONL line larger than the cap instead of growing RAM, then resumes clean lines', () => {
+    const lines: string[] = [];
+    const reader = createJsonLineReader((line) => lines.push(line));
+    // Oversized line: >2 MB with no newline. Must be discarded whole, and the
+    // buffered string must stay bounded while it accumulates.
+    reader.push(Buffer.from(`{"pad":"${'x'.repeat(3 * 1024 * 1024)}`));
+    reader.push(Buffer.from(`"}\n{"ok":1}\n`));
+    reader.end();
+    expect(lines).toEqual(['{"ok":1}']);
+  });
 });
 
 describe('extractAssistantText (stale preamble guard)', () => {

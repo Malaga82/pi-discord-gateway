@@ -22,9 +22,55 @@ afterEach(() => {
   }
 });
 
-describe('message attempt budget', () => {
-  it('counts invocations at claim and abandons rows over budget', async () => {
+describe('message attempt budget and restart recovery', () => {
+  it('parks a mid-execution row as interrupted (reported, never rerun) and requeues routing rows', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'pidg-attempts-'));
+    tempDirs.push(tempDir);
+    process.env.DB_PATH = ':memory:';
+    process.env.SESSIONS_DIR = resolve(tempDir, 'sessions');
+    process.env.PI_CWD = '/global/project';
+
+    vi.resetModules();
+    const db = await import('../src/db.js');
+    db.initDb();
+
+    const interrupted = db.enqueueMessage({
+      channelJid: 'dc:1',
+      sender: 'u_1',
+      senderName: 'Alice',
+      content: 'mid-turn crash',
+      timestamp: new Date().toISOString(),
+    });
+    const routed = db.enqueueMessage({
+      channelJid: 'dc:1',
+      sender: 'u_1',
+      senderName: 'Alice',
+      content: 'crash while opening the thread',
+      timestamp: new Date().toISOString(),
+      routeThread: true,
+    });
+
+    // Simulate a crash: one row claimed into execution, one into routing.
+    expect(db.claimNextMessage('dc:1')?.status).toBe('processing');
+    expect(db.claimNextMessage('dc:1')?.status).toBe('routing');
+
+    const result = db.recoverStuckMessages();
+    // Execution started → interrupted with a notice carrying the task id.
+    expect(result.interrupted).toBe(1);
+    const parked = db.getQueuedMessage(interrupted)!;
+    expect(parked.status).toBe('interrupted');
+    expect(parked.notice_text).toContain(`Task #${interrupted}`);
+    // Routing never invoked pi → safe replay: it is pending again.
+    expect(db.getQueuedMessage(routed)?.status).toBe('pending');
+    // Reported means not rerun: the parked row is no longer claimable — the
+    // next claim is the routing row, re-claimed as a thread-starter.
+    const reclained = db.claimNextMessage('dc:1');
+    expect(reclained?.rowid).toBe(routed);
+    expect(reclained?.status).toBe('routing');
+  });
+
+  it('abandons a processing row once its attempt budget is burned (crash-loop ceiling)', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'pidg-attempts-budget-'));
     tempDirs.push(tempDir);
     process.env.DB_PATH = ':memory:';
     process.env.SESSIONS_DIR = resolve(tempDir, 'sessions');
@@ -42,30 +88,18 @@ describe('message attempt budget', () => {
       timestamp: new Date().toISOString(),
     });
 
-    // Two full cycles: claim + "reboot" recovery. Attempts are preserved
-    // across recoveries — that's the memory of the budget.
-    for (let i = 1; i <= 2; i++) {
-      const msg = db.claimNextMessage('dc:1');
-      expect(msg?.attempts).toBe(i);
-      expect(db.recoverStuckMessagesWithBudget(3).recovered).toBe(1); // still under budget
+    // The queue itself never replays an interrupted row, so reaching the
+    // budget needs the row handed back (manual surgery / future replay).
+    for (let i = 1; i <= 3; i++) {
+      const claimed = db.claimNextMessage('dc:1');
+      expect(claimed?.attempts).toBe(i);
+      if (i < 3) db.setMessageState(claimed!.rowid, 'pending');
     }
 
-    // Third claim reaches the budget: recovery abandons the row instead.
-    expect(db.claimNextMessage('dc:1')?.attempts).toBe(3);
-    const { recovered, abandoned } = db.recoverStuckMessagesWithBudget(3);
-    expect(recovered).toBe(0);
+    const { recovered, interrupted, abandoned } = db.recoverStuckMessages();
     expect(abandoned).toBe(1);
+    expect(recovered).toBe(0);
+    expect(interrupted).toBe(0);
     expect(db.claimNextMessage('dc:1')).toBeUndefined();
-
-    // A fresh message with one attempt still gets a second life.
-    db.enqueueMessage({
-      channelJid: 'dc:1',
-      sender: 'u_2',
-      senderName: 'Bob',
-      content: 'normal message',
-      timestamp: new Date().toISOString(),
-    });
-    expect(db.claimNextMessage('dc:1')?.attempts).toBe(1);
-    expect(db.recoverStuckMessagesWithBudget(3).recovered).toBe(1);
   });
 });

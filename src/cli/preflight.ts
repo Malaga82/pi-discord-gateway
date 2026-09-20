@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 
 export function assertSupportedPiVersion(version: string): void {
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
-  if (!match || Number(match[1]) !== 0 || Number(match[2]) < 83 || Number(match[2]) >= 86) {
+  if (!match || Number(match[1]) !== 0 || Number(match[2]) < 83 || Number(match[2]) >= 87) {
     throw new Error(
-      `Unsupported pi version ${version}. Install pi >=0.83.0 <0.86.0 (recommended: 0.85.1).`,
+      `Unsupported pi version ${version}. Install pi >=0.83.0 <0.87.0 (recommended: 0.86.0).`,
     );
   }
 }

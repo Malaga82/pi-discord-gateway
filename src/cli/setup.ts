@@ -110,7 +110,9 @@ export async function runSetup(args: string[]): Promise<void> {
           hint: 'Only respond in manually registered channels (piscord register ...)',
         },
       ],
-      initialValue: 'open' as const,
+      // Preselect the config default (allowlist): Enter must not open the
+      // agent surface (shell, files, cwd) to every visible channel.
+      initialValue: 'allowlist' as const,
     });
     if (clack.isCancel(result)) {
       clack.cancel('Setup cancelled.');
@@ -140,6 +142,9 @@ export async function runSetup(args: string[]): Promise<void> {
   mkdirSync(DEFAULT_DATA_DIR, { recursive: true });
   mkdirSync(DEFAULT_SESSIONS_DIR, { recursive: true });
 
+  // 1.8.4 regression restored: the file holds DISCORD_BOT_TOKEN — 0644 under
+  // a typical umask is token impersonation for every local user. mode applies
+  // on create; pre-existing world-readable files need a manual chmod 600.
   writeFileSync(
     configPath,
     buildConfigFile({
@@ -150,6 +155,7 @@ export async function runSetup(args: string[]): Promise<void> {
       sessionsDir: DEFAULT_SESSIONS_DIR,
       dbPath: DEFAULT_DB_PATH,
     }),
+    { mode: 0o600 },
   );
 
   clack.log.success(`Config written to: ${configPath}`);

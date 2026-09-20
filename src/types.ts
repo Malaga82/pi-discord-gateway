@@ -44,6 +44,8 @@ export interface QueuedMessage {
   response_text: string | null;
   delivery_attempts: number;
   next_attempt_at: number;
+  /** Pending user-facing notice (interrupted / delivery_uncertain / …) */
+  notice_text: string | null;
   /** JSON array of attachment metadata, or null */
   attachments: string | null;
   /** Invocation attempts so far (incremented at claim; recovery gives up at max) */

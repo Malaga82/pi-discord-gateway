@@ -321,6 +321,35 @@ describe('renderToolLine redaction', () => {
     expect(log).toContain('"region":"eu"');
   });
 
+  it('redacts exotic key names that survive as bare JSON keys (pat/cookie/session_id residue)', () => {
+    const state = createStreamState();
+    applyEvent(state, {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'toolCall',
+            name: 'http',
+            arguments: {
+              pat: 'gho_notArealToken12345678',
+              cookie: 'session=deadbeefcafe',
+              session_id: 'sid-9876543210abcdef',
+              github: 'github_pat_11ABCDE0_fakenotreal',
+            },
+          },
+        ],
+      },
+    });
+    const log = renderLog(state);
+    expect(log).not.toContain('deadbeefcafe');
+    expect(log).not.toContain('sid-9876543210abcdef');
+    expect(log).not.toContain('github_pat_11ABCDE');
+    // Keys stay visible so the activity log keeps making sense.
+    expect(log).toContain('cookie');
+    expect(log).toContain('session_id');
+  });
+
   it('renders the first STRING among command/path/query/url, never [object Object]', () => {
     const state = createStreamState();
     applyEvent(state, {
@@ -349,5 +378,18 @@ describe('renderToolLine redaction', () => {
       });
     }
     expect(state.thinking.length).toBeLessThanOrEqual(4000);
+  });
+
+  it('caps accumulated streamed text deltas (unbounded string regression)', () => {
+    const state = createStreamState();
+    for (let i = 0; i < 2000; i++) {
+      applyEvent(state, {
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'x'.repeat(100) },
+      });
+    }
+    expect(state.text.length).toBeLessThanOrEqual(64000);
+    // The tail is what rendering shows — recent text must survive the cap.
+    expect(state.text.endsWith('x')).toBe(true);
   });
 });

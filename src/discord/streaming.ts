@@ -29,6 +29,11 @@ const INTERSTITIAL_MAX = 500;
 // Accumulated thinking is only ever rendered as a 200-char tail; keep the
 // raw string bounded so long sessions can't balloon it.
 const THINKING_CAP = 4_000;
+// ponytail: streamed answer text is capped in memory like thinking; the
+// rendered payload is tailed to 1400 chars anyway. If a turn ever exceeds
+// this, only the scrollback preview loses its head — the delivered answer
+// comes from the message_end event, not from state.text.
+const TEXT_CAP = 64_000;
 const SENTENCE_MAX = 200;
 
 const TOOL_META: Record<string, { emoji: string; verb: string }> = {
@@ -123,7 +128,7 @@ export function applyEvent(state: StreamState, event: PiEvent): void {
       // string would grow with every thinking_delta of a long session.
       state.thinking = `${state.thinking}${ev.delta}`.slice(-THINKING_CAP);
     } else if (ev.type === 'text_delta' && ev.delta) {
-      state.text += ev.delta;
+      state.text = `${state.text}${ev.delta}`.slice(-TEXT_CAP);
     } else if (ev.type === 'toolcall_start') {
       state.msgHasToolCall = true;
     }
@@ -157,6 +162,27 @@ export function applyEvent(state: StreamState, event: PiEvent): void {
   }
 }
 
+/** Bounded stand-in for JSON.stringify: fixed depth, fixed entry count,
+ * sliced values. JSON.stringify on a huge tool-args object is one synchronous
+ * tick on the event loop of the whole gateway; this walk is O(cap), not
+ * O(payload). Strings keep JSON-style quotes: the redaction regexes use the
+ * closing quote as the value boundary, exactly like raw JSON.stringify. */
+function previewValue(value: unknown, depth: number): string {
+  if (typeof value === 'string') return `"${value.slice(0, 200)}"`;
+  if (value === null || value === undefined || typeof value !== 'object') return String(value);
+  if (depth <= 0) return Array.isArray(value) ? '[…]' : '{…}';
+  const entries = Array.isArray(value)
+    ? value.slice(0, 4).map((item) => previewValue(item, depth - 1))
+    : Object.entries(value)
+        .slice(0, 4)
+        .map(([key, item]) => `"${key}":${previewValue(item, depth - 1)}`);
+  const size = Array.isArray(value) ? value.length : Object.keys(value).length;
+  const ellipsis = size > 4 ? ',…' : '';
+  const open = Array.isArray(value) ? '[' : '{';
+  const close = Array.isArray(value) ? ']' : '}';
+  return `${open}${entries.join(',')}${ellipsis}${close}`;
+}
+
 function renderToolLine(toolCall: any): string {
   const name = String(toolCall.name || 'tool').toLowerCase();
   const meta = TOOL_META[name] || { emoji: '🔧', verb: name };
@@ -176,23 +202,24 @@ function renderToolLine(toolCall: any): string {
             ? args.query
             : typeof args.url === 'string'
               ? args.url
-              : JSON.stringify(args);
+              : previewValue(args, 3);
   }
   argPreview = String(argPreview).replace(/\s+/gu, ' ').replace(/`/gu, "'").trim();
   // The activity log persists in the channel scrollback: strip credentials
   // that would otherwise land there verbatim. The first pattern eats the
   // scheme word too ("Authorization: Bearer eyJ…" — a naive \S+ would stop
-  // at the space and leak the token itself); the second covers
+  // at the space and leak the token itself) and the exotic key names that
+  // survive as bare JSON keys (pat, cookie, session_id); the second covers
   // user:password@host URLs; the third catches well-known token prefixes
   // regardless of keywords. Known ceiling: `curl -u admin:hunter2` (no
   // keyword) stays visible — that's real secret-scanner territory.
   argPreview = argPreview
     .replace(
-      /(authorization|bearer|token|api[_-]?key|secret[_-]?access[_-]?key|password|passwd|secret)([\s:="']+)(bearer\s+|basic\s+)?[^\s"}]+/gi,
+      /(authorization|bearer|token|api[_-]?key|secret[_-]?access[_-]?key|password|passwd|secret|pat|cookie|session[_-]?id)([\s:="']+)(bearer\s+|basic\s+)?[^\s"}]+/gi,
       '$1$2[REDACTED]',
     )
     .replace(/(\/\/[^:/\s]+:)[^@\s]+@/g, '$1[REDACTED]@')
-    .replace(/\b(sk|ghp|gho|xox[baprs]|AIza)[A-Za-z0-9_-]{8,}/g, '[REDACTED]');
+    .replace(/\b(sk|ghp|gho|xox[baprs]|AIza|github_pat_)[A-Za-z0-9_-]{8,}/g, '[REDACTED]');
   const short = argPreview.length > ARG_MAX ? `${argPreview.slice(0, ARG_MAX)}…` : argPreview;
   return short ? `${meta.emoji} ${meta.verb} \`${short}\`` : `${meta.emoji} ${meta.verb}`;
 }
