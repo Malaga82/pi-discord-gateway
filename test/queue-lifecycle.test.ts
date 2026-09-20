@@ -91,8 +91,12 @@ function enqueue(content: string, channelJid = 'dc:a') {
   });
 }
 async function started() {
-  await vi.waitFor(() =>
-    expect(Number(readFileSync(join(directory, 'child-pid'), 'utf8'))).toBeGreaterThan(0),
+  await vi.waitFor(
+    () => {
+      expect(Number(readFileSync(join(directory, 'child-pid'), 'utf8'))).toBeGreaterThan(0);
+    },
+    // CI runners are slow: a cold model-catalog probe runs before the spawn.
+    { timeout: 15000, interval: 50 },
   );
   return Number(readFileSync(join(directory, 'child-pid'), 'utf8'));
 }
@@ -168,7 +172,10 @@ describe('queue with real processes and durable SQLite', () => {
       .mockRejectedValueOnce(new Error('network timeout'))
       .mockResolvedValue('rest');
     queue.startProcessingLoop();
-    await vi.waitFor(() => expect(db.getQueuedMessage(id)?.delivery_attempts).toBe(1));
+    await vi.waitFor(() => expect(db.getQueuedMessage(id)?.delivery_attempts).toBe(1), {
+      timeout: 15000,
+      interval: 50,
+    });
     await queue.stopProcessingLoop({ timeoutMs: 0 });
     db.closeDb();
     db.initDb();
