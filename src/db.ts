@@ -684,11 +684,17 @@ export async function purgeOldMessages(
       ).map((row) => Number(row.rowid));
       if (rowids.length === 0) return 0;
       // Chunks have no FK cascade: delete them before their parents, or a
-      // purged queue row orphans its response_chunks forever.
-      const placeholders = rowids.map(() => '?').join(',');
-      stmt(`delete from response_chunks where queue_id in (${placeholders})`).run(...rowids);
-      return stmt(`delete from message_queue where rowid in (${placeholders})`).run(...rowids)
-        .changes;
+      // purged queue row orphans its response_chunks forever. json_each
+      // keeps the SQL fixed-arity: a per-length IN-list would mint a new
+      // prepared statement in the stmt() cache for every distinct partial
+      // batch size, forever (the cache has no eviction).
+      const rowidsJson = JSON.stringify(rowids);
+      stmt('delete from response_chunks where queue_id in (select value from json_each(?))').run(
+        rowidsJson,
+      );
+      return stmt('delete from message_queue where rowid in (select value from json_each(?))').run(
+        rowidsJson,
+      ).changes;
     })();
 
   let queue = 0;

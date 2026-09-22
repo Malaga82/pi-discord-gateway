@@ -68,6 +68,10 @@ describe('durable recovery', () => {
     await deliverResponse(id, io, new AbortController().signal);
     expect(db.getQueuedMessage(id)?.next_attempt_at).toBeGreaterThanOrEqual(now + 10500);
     expect(db.getResponseChunks(id)[0].status).toBe('pending');
+    // Guards the strict-FIFO invariant documented in claimNextMessage (db.ts):
+    // a delivering row in backoff gates the channel on purpose. Moving the
+    // next_attempt_at predicate inside the row subquery would "optimize"
+    // this into answer reordering — this test is what stops that.
     expect(db.claimNextMessage(channel.jid)).toBeUndefined();
     db.retryDelivery(id, 0);
     io.send.mockResolvedValue('accepted');

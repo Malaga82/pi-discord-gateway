@@ -168,4 +168,56 @@ describe('purgeOldMessages', () => {
       db.closeDb();
     }
   });
+
+  it('purges across a full batch plus a partial tail, chunks included', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'pidg-retention-'));
+    tempDirs.push(tempDir);
+    process.env.DB_PATH = join(tempDir, 'gateway.db');
+
+    vi.resetModules();
+    const db = await import('../src/db.js');
+    db.initDb();
+
+    try {
+      const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .slice(0, 19)
+        .replace('T', ' ');
+      const raw = new Database(process.env.DB_PATH!);
+      try {
+        // PURGE_BATCH is 5000 (db.ts): 5000 + 37 forces one full batch and
+        // one arbitrary-size partial tail — the shape that used to mint a
+        // new prepared statement per run when the deletes varied arity.
+        const insert = raw.prepare(
+          "insert into message_queue (channel_jid, sender, sender_name, content, timestamp, status, processed_at) values ('dc:a','u','u','old',?,'done',?)",
+        );
+        const total = 5000 + 37;
+        for (let i = 0; i < total; i++) insert.run(old, old);
+        const firstRowid = Number(
+          (raw.prepare('select min(rowid) r from message_queue').get() as { r: number }).r,
+        );
+        const lastRowid = Number(
+          (raw.prepare('select max(rowid) r from message_queue').get() as { r: number }).r,
+        );
+        const chunk = raw.prepare(
+          "insert into response_chunks (queue_id, part, content, nonce) values (?, 0, 'part', 'n')",
+        );
+        chunk.run(firstRowid);
+        chunk.run(lastRowid);
+
+        const purged = await db.purgeOldMessages(30);
+        expect(purged.queue).toBe(total);
+        expect((raw.prepare('select count(*) c from message_queue').get() as { c: number }).c).toBe(
+          0,
+        );
+        expect(
+          (raw.prepare('select count(*) c from response_chunks').get() as { c: number }).c,
+        ).toBe(0);
+      } finally {
+        raw.close();
+      }
+    } finally {
+      db.closeDb();
+    }
+  });
 });
