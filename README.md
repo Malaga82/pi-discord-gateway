@@ -112,6 +112,8 @@ The gateway registers a global `/pi` command on Discord:
 
 `/pi model` reads the catalog from the configured `PI_BIN`, so it stays in sync when pi adds or removes models. It also honors pi's `enabledModels` setting (configured through `/scoped-models`), including model order and glob patterns. If no scope is configured, it shows all available models.
 
+In server channels, every subcommand that changes channel-wide state (`model`, `reset-model`, `thinking`, `reset-thinking`, `threads`, `new`, `stop`) requires **Manage Channels**. `/pi status` is read-only and open to everyone. Direct messages are not gated.
+
 ## Conversation Threads
 
 Automatic thread creation is **off by default**, including after an upgrade. Enable it in a registered server text channel with `/pi threads enabled:true` (requires Manage Channels), or locally:

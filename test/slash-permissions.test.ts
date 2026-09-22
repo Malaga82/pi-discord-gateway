@@ -117,3 +117,33 @@ describe('slash command boundaries', () => {
     });
   });
 });
+
+describe('mutating command gate', () => {
+  it.each(['stop', 'new', 'model', 'reset-model', 'thinking', 'reset-thinking'])(
+    'requires Manage Channels for /pi %s in guilds',
+    async (subcommand) => {
+      const value = interaction(subcommand);
+      value.memberPermissions = new PermissionsBitField();
+      await invoke(value);
+      expect(value.reply).toHaveBeenCalledWith(
+        expect.objectContaining({ content: expect.stringContaining('Manage Channels') }),
+      );
+    },
+  );
+  it('does not gate the read-only status command', async () => {
+    const value = interaction('status');
+    value.memberPermissions = new PermissionsBitField();
+    await invoke(value);
+    expect(value.reply).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('Manage Channels permission is required'),
+      }),
+    );
+  });
+  it('does not gate DMs (single participant)', async () => {
+    const value = interaction('reset-thinking');
+    value.inGuild = () => false;
+    await invoke(value);
+    expect(db.getChannel('dc:parent')?.thinkingOverride).toBe('');
+  });
+});

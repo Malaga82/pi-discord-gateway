@@ -51,6 +51,18 @@ import { abortChannelTask, isChannelProcessing } from '../agent/queue.js';
 import { rotateChannelSessionDir } from '../session/path.js';
 import type { RegisteredChannel } from '../types.js';
 
+/** Subcommands that mutate channel-wide state (session, queue, model,
+ * thinking) and therefore require Manage Channels in guilds. `status` is
+ * read-only and stays open. */
+const MUTATING_SUBCOMMANDS = new Set([
+  'stop',
+  'new',
+  'model',
+  'reset-model',
+  'thinking',
+  'reset-thinking',
+]);
+
 const PI_COMMAND = new SlashCommandBuilder()
   .setName('pi')
   .setDescription('Inspect or change pi model settings for this channel')
@@ -165,6 +177,22 @@ export async function handleChatCommand(interaction: ChatInputCommandInteraction
   if (interaction.commandName !== 'pi') return;
 
   const subcommand = interaction.options.getSubcommand();
+
+  // Channel-wide mutating commands need Manage Channels in guilds. Without
+  // this gate anyone who can see the channel could kill another user's
+  // running task (/stop), archive the shared session (/new) or change
+  // model/thinking with direct cost impact. DMs have a single participant,
+  // so there is nothing to gate there.
+  if (
+    MUTATING_SUBCOMMANDS.has(subcommand) &&
+    interaction.inGuild() &&
+    !interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels)
+  ) {
+    await interaction.reply(
+      reply('Manage Channels permission is required for this command.', interaction),
+    );
+    return;
+  }
 
   try {
     switch (subcommand) {
