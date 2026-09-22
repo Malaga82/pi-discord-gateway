@@ -427,11 +427,26 @@ export async function sendResponse(
   }
 }
 
+/** REST body for durable delivery sends. allowed_mentions parse:[] keeps
+ * model-generated <@id>/<@&role>/@everyone from pinging anyone — without it
+ * Discord applies default parsing and real users get pinged. */
+export function buildDurableMessageBody(
+  content: string,
+  nonce: string,
+): {
+  content: string;
+  nonce: string;
+  enforce_nonce: boolean;
+  allowed_mentions: { parse: string[] };
+} {
+  return { content, nonce, enforce_nonce: true, allowed_mentions: { parse: [] } };
+}
+
 export const deliveryTransport: DeliveryTransport = {
   async send(jid, content, nonce) {
     if (!deliveryRest) throw new Error('Discord is not connected');
     const message = (await deliveryRest.post(Routes.channelMessages(jid.replace(/^dc:/, '')), {
-      body: { content, nonce, enforce_nonce: true },
+      body: buildDurableMessageBody(content, nonce),
     })) as { id: string };
     return message.id;
   },
