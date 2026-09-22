@@ -204,13 +204,23 @@ export async function runSetup(args: string[]): Promise<void> {
   clack.outro('Setup complete! Send a message in any Discord channel to test.');
 }
 
+async function checkPiExecutableSafely(piBin: string, cwd: string): Promise<string | undefined> {
+  // The wizard must start even when pi is missing or broken: the
+  // "✗ pi binary: not found" prerequisite line below is the intended UX.
+  try {
+    return await checkPiExecutable(piBin, cwd);
+  } catch {
+    return undefined;
+  }
+}
+
 async function checkPrerequisites(): Promise<{
   piPath: string | undefined;
   piVersion: string | undefined;
   authFound: boolean;
   modelCount: number | undefined;
 }> {
-  const piVersion = await checkPiExecutable(config.piBin, config.piCwd);
+  const piVersion = await checkPiExecutableSafely(config.piBin, config.piCwd);
   const piPath = findExecutable(config.piBin) || config.piBin;
   const authFound = existsSync(AUTH_PATH);
   let modelCount: number | undefined;

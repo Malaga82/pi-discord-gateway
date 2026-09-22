@@ -4,6 +4,17 @@ import { randomUUID } from 'node:crypto';
 import { dirname, basename, resolve } from 'node:path';
 import lockfile from 'proper-lockfile';
 
+/** Raised when another live gateway holds the database lock. The CLI treats
+ * this as a clean exit (code 0): under systemd Restart=on-failure a non-zero
+ * exit restarts the unit every RestartSec forever while the owner stays up,
+ * flooding the journal. */
+export class InstanceLockHeldError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'InstanceLockHeldError';
+  }
+}
+
 export async function acquireInstanceLock(
   dbPath: string,
   onCompromised: (error: Error) => void,
@@ -33,7 +44,7 @@ export async function acquireInstanceLock(
         alive = (error as NodeJS.ErrnoException).code !== 'ESRCH';
       }
       if (alive)
-        throw new Error(
+        throw new InstanceLockHeldError(
           'Another gateway process still owns this database. Stop it before restarting.',
         );
     }
@@ -80,7 +91,7 @@ export async function acquireInstanceLock(
       }
     };
   } catch (error) {
-    throw new Error(
+    throw new InstanceLockHeldError(
       'Another gateway owns this database, or its lock has not expired yet. After a crash, wait 30 seconds before restarting.',
       { cause: error },
     );

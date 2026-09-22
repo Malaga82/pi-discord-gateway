@@ -13,7 +13,7 @@ import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runProcess } from '../src/agent/subprocess.js';
-import { acquireInstanceLock } from '../src/instance-lock.js';
+import { acquireInstanceLock, InstanceLockHeldError } from '../src/instance-lock.js';
 
 const directories: string[] = [];
 afterEach(() => {
@@ -263,5 +263,34 @@ describe('gateway instance lock', () => {
     await (
       await acquireInstanceLock(path, compromised)
     )();
+  });
+
+  it('reports a held lock as InstanceLockHeldError (clean systemd exit)', async () => {
+    const dir = directory();
+    const compromised = () => {
+      throw new Error('Unexpected lock compromise');
+    };
+    // Live local owner path.
+    const path = join(dir, 'gateway.db');
+    writeFileSync(path, '');
+    const release = await acquireInstanceLock(path, compromised);
+    const second = await acquireInstanceLock(path, compromised).then(
+      () => null,
+      (error) => error,
+    );
+    await release();
+    expect(second).toBeInstanceOf(InstanceLockHeldError);
+
+    // Fresh foreign renewable-lock path.
+    const other = join(dir, 'other.db');
+    writeFileSync(other, '');
+    writeFileSync(
+      `${other}.owner.json`,
+      JSON.stringify({ pid: process.pid, host: `${hostname()}-elsewhere`, token: 'x' }),
+    );
+    mkdirSync(`${other}.lock`);
+    await expect(acquireInstanceLock(other, compromised)).rejects.toBeInstanceOf(
+      InstanceLockHeldError,
+    );
   });
 });

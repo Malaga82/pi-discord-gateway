@@ -7,6 +7,7 @@ import { checkPiDependencies, checkPiExecutable } from './preflight.js';
 import type { RegisteredChannel } from '../types.js';
 import { config, resolveConfigPath } from '../config.js';
 import { MIN_NODE_VERSION, nodeVersionMeetsFloor } from '../util/node-floor.js';
+import { InstanceLockHeldError } from '../instance-lock.js';
 
 type DbModule = typeof import('../db.js');
 
@@ -122,6 +123,13 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
   try {
     process.exitCode = await main(argv);
   } catch (err) {
+    if (err instanceof InstanceLockHeldError) {
+      // Clean exit: under Restart=on-failure any non-zero code restarts the
+      // unit every RestartSec for as long as the other gateway stays up.
+      console.error(`piscord: ${err.message}`);
+      process.exitCode = 0;
+      return;
+    }
     await reportError(command, err);
     process.exitCode = 1;
   }
