@@ -192,7 +192,15 @@ describe('purgeOldMessages', () => {
           "insert into message_queue (channel_jid, sender, sender_name, content, timestamp, status, processed_at) values ('dc:a','u','u','old',?,'done',?)",
         );
         const total = 5000 + 37;
-        for (let i = 0; i < total; i++) insert.run(old, old);
+        // One transaction for the bulk insert: 5037 autocommit runs are 5037
+        // fsyncs, which on slow CI disks starves the parallel workers (two
+        // tests timed out on a windows runner with this suite running).
+        raw.exec('begin');
+        try {
+          for (let i = 0; i < total; i++) insert.run(old, old);
+        } finally {
+          raw.exec('commit');
+        }
         const firstRowid = Number(
           (raw.prepare('select min(rowid) r from message_queue').get() as { r: number }).r,
         );
