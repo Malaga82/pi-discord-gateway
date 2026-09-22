@@ -111,7 +111,7 @@ describe('silent cron disable observability', () => {
         expect.objectContaining({ taskId: expect.any(Number), schedule: '0 0 30 2 *' }),
         'Scheduled task has no next run for its schedule and is now disabled',
       );
-      expect(db.getScheduledTask?.(1) ?? db.listScheduledTasks()[0]).toMatchObject({
+      expect(db.listScheduledTasks()[0]).toMatchObject({
         enabled: 0,
       });
     } finally {
