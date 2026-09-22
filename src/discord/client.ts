@@ -332,6 +332,23 @@ async function handleMessage(message: Message): Promise<void> {
     return;
   }
 
+  // Tell the channel about attachments dropped at the gate. Without this the
+  // only trace was a server-side log — and for an attachment-only message it
+  // was the whole message that silently vanished (empty content returns
+  // below before enqueue). Past this point the user is talking to the bot,
+  // so they deserve to know their file was dropped however the run ends.
+  const skippedNotice = skippedAttachmentsNotice(attachmentSelection?.rejected ?? []);
+  if (skippedNotice) {
+    await message
+      .reply({ content: skippedNotice, allowedMentions: { parse: [] } })
+      .catch((err: unknown) =>
+        logger.debug(
+          { jid, err: err instanceof Error ? err.message : String(err) },
+          'Could not deliver skipped-attachments notice',
+        ),
+      );
+  }
+
   // Strip trigger prefix from content sent to agent (before the reply prefix,
   // so the trigger stays anchored at the start of the original content)
   content = content.replace(triggerPattern, '').trim();
@@ -344,16 +361,6 @@ async function handleMessage(message: Message): Promise<void> {
   // After the prefix concat: a bare `@bot` reply would otherwise become the
   // non-empty string "[Reply to Bot] " and trigger a full pi run on nothing.
   if (!content) return;
-
-  // Tell the channel about attachments dropped at the gate. Without this the
-  // only trace was a server-side log: pi ran without the file (or the whole
-  // attachment-only message silently vanished) and the user never knew.
-  const skippedNotice = skippedAttachmentsNotice(attachmentSelection?.rejected ?? []);
-  if (skippedNotice) {
-    await message
-      .reply({ content: skippedNotice, allowedMentions: { parse: [] } })
-      .catch(() => undefined);
-  }
 
   // ── Enqueue ──
   enqueueMessage({
