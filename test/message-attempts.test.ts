@@ -103,3 +103,69 @@ describe('message attempt budget and restart recovery', () => {
     expect(db.claimNextMessage('dc:1')).toBeUndefined();
   });
 });
+
+describe('claim head-of-line and attempts accounting', () => {
+  it('keeps later work behind a delivering row in backoff (channel FIFO)', async () => {
+    process.env.DB_PATH = ':memory:';
+    vi.resetModules();
+    const db = await import('../src/db.js');
+    db.initDb();
+
+    try {
+      const backoff = db.enqueueMessage({
+        channelJid: 'dc:9',
+        sender: 'u',
+        senderName: 'U',
+        content: 'delivering in backoff',
+        timestamp: new Date().toISOString(),
+      });
+      const fresh = db.enqueueMessage({
+        channelJid: 'dc:9',
+        sender: 'u',
+        senderName: 'U',
+        content: 'new pending behind it',
+        timestamp: new Date().toISOString(),
+      });
+      db.setMessageState(backoff, 'delivering');
+      // Backoff: not claimable for the next 5 minutes.
+      db.retryDelivery(backoff, 300_000);
+
+      // Ordering guarantee: a later message must not overtake the earlier
+      // undelivered one, so the backoff row gates the channel on purpose.
+      expect(db.claimNextMessage('dc:9')).toBeUndefined();
+      expect(db.getQueuedMessage(fresh)?.status).toBe('pending');
+      // Once the backoff expires the queue moves again, oldest first.
+      db.retryDelivery(backoff, 0);
+      expect(db.claimNextMessage('dc:9')?.rowid).toBe(backoff);
+    } finally {
+      db.closeDb();
+    }
+  });
+
+  it('does not burn attempts when a claim leaves the row delivering', async () => {
+    process.env.DB_PATH = ':memory:';
+    vi.resetModules();
+    const db = await import('../src/db.js');
+    db.initDb();
+
+    try {
+      const rowid = db.enqueueMessage({
+        channelJid: 'dc:8',
+        sender: 'u',
+        senderName: 'U',
+        content: 'hello',
+        timestamp: new Date().toISOString(),
+      });
+      expect(db.claimNextMessage('dc:8')?.rowid).toBe(rowid);
+      db.setMessageState(rowid, 'delivering');
+      // Delivery re-claims used to increment attempts unconditionally even
+      // though the field counts invocation attempts (finding 20).
+      db.retryDelivery(rowid, 300_000);
+      const before = db.getQueuedMessage(rowid)!.attempts;
+      expect(db.claimNextMessage('dc:8')).toBeUndefined();
+      expect(db.getQueuedMessage(rowid)!.attempts).toBe(before);
+    } finally {
+      db.closeDb();
+    }
+  });
+});

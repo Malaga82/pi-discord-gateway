@@ -213,6 +213,7 @@ export async function invokeAgent(
 
     // Streaming mode keeps only the JSONL event stream; plain mode buffers stdout.
     const chunks: Buffer[] = [];
+    let outBytes = 0;
     const errChunks: Buffer[] = [];
 
     // Incremental JSONL parsing for streaming mode. If pi produces no valid
@@ -244,7 +245,12 @@ export async function invokeAgent(
       if (onEvent) reader.push(c);
       // Buffer for the plain-text fallback until the first valid JSON event
       // proves pi honored --mode json; after that the buffer is dead weight.
-      if (!sawJson) chunks.push(c);
+      // Same 64 KB cap as the stderr buffer below: a chatty pi that never
+      // emits valid JSON must not grow the heap without bound.
+      if (!sawJson && outBytes < 64 * 1024) {
+        chunks.push(c);
+        outBytes += c.length;
+      }
     });
     // Cap stderr retention: consumers slice the last 600 chars anyway.
     let errBytes = 0;

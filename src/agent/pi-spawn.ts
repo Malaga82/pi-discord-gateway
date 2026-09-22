@@ -14,6 +14,9 @@ import { dirname, resolve as pathResolve } from 'node:path';
 export function sanitizedChildEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   delete env.DISCORD_BOT_TOKEN;
+  // PIDG_CONFIG points at config.env, which itself holds the token: a child
+  // that cannot read the env var could still `cat $PIDG_CONFIG`.
+  delete env.PIDG_CONFIG;
   return env;
 }
 

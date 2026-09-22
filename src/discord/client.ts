@@ -424,7 +424,10 @@ export async function sendResponse(
           // The user already received part of the answer — tell them it was
           // truncated instead of silently marking the message failed.
           await textChannel
-            .send(`⚠️ Delivery interrupted: response truncated (${sent}/${chunks.length} parts).`)
+            .send({
+              content: `⚠️ Delivery interrupted: response truncated (${sent}/${chunks.length} parts).`,
+              allowedMentions: { parse: [] },
+            })
             .catch(() => undefined);
         }
         throw err;
@@ -569,7 +572,12 @@ export async function sendChunkWithRetry(
         status === undefined || status === 429 || (typeof status === 'number' && status >= 500);
       if (!transient || attempt >= DELAYS.length || signal?.aborted) throw err;
       const reported: unknown = err?.timeToReset ?? err?.retryAfter;
-      const wait = typeof reported === 'number' ? reported : DELAYS[attempt];
+      // Clamp to the durable-path ceiling (delivery.ts): a hostile/broken 429
+      // body claiming hours of timeToReset must not freeze the channel.
+      const wait =
+        typeof reported === 'number' && reported > 0
+          ? Math.min(reported, 300_000)
+          : DELAYS[attempt];
       const jitter = Math.random() * 250; // parallel chunks must not retry in sync
       logger.warn(
         { err: err?.message, status, waitMs: wait + jitter, attempt },
@@ -577,17 +585,20 @@ export async function sendChunkWithRetry(
       );
       // Interruptible sleep: an abort lands within the backoff window, not
       // after it — a shutdown must not wait out a full 8s sleep per chunk.
-      await new Promise<void>((resolve) => {
-        const t = setTimeout(resolve, wait + jitter);
-        signal?.addEventListener(
-          'abort',
-          () => {
-            clearTimeout(t);
+      let removeAbortListener = () => {};
+      try {
+        await new Promise<void>((resolve) => {
+          const onAbort = () => {
+            clearTimeout(timer);
             resolve();
-          },
-          { once: true },
-        );
-      });
+          };
+          const timer = setTimeout(resolve, wait + jitter);
+          signal?.addEventListener('abort', onAbort, { once: true });
+          removeAbortListener = () => signal?.removeEventListener('abort', onAbort);
+        });
+      } finally {
+        removeAbortListener();
+      }
       if (signal?.aborted) throw err; // stop mid-backoff, don't retry after abort
     }
   }

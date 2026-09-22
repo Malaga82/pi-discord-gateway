@@ -126,9 +126,17 @@ export function applyEvent(state: StreamState, event: PiEvent): void {
     if (ev.type === 'thinking_delta' && ev.delta) {
       // Cap accumulation: rendering tails this anyway, and an unbounded
       // string would grow with every thinking_delta of a long session.
-      state.thinking = `${state.thinking}${ev.delta}`.slice(-THINKING_CAP);
+      state.thinking += ev.delta;
+      if (state.thinking.length > THINKING_CAP) {
+        state.thinking = state.thinking.slice(-THINKING_CAP);
+      }
     } else if (ev.type === 'text_delta' && ev.delta) {
-      state.text = `${state.text}${ev.delta}`.slice(-TEXT_CAP);
+      // Tail-slice only once past the cap: re-slicing on every delta forced
+      // a 64 KB flatten per token event for the rest of long answers.
+      state.text += ev.delta;
+      if (state.text.length > TEXT_CAP) {
+        state.text = state.text.slice(-TEXT_CAP);
+      }
     } else if (ev.type === 'toolcall_start') {
       state.msgHasToolCall = true;
     }

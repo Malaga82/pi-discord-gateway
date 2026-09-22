@@ -313,11 +313,18 @@ export function getQueuedMessage(rowid: number): QueuedMessage | undefined {
     | undefined;
 }
 export function claimNextMessage(channelJid: string): QueuedMessage | undefined {
+  // Strict FIFO: the oldest pending/delivering row gates the channel, and
+  // next_attempt_at gates the claim. ponytail: a delivering row in delivery
+  // backoff (up to 300s after repeated 429s) therefore blocks newer pending
+  // rows on purpose — letting a later message deliver first would reorder
+  // answers in the channel scrollback. Keep the predicate outside the
+  // subquery: moving it inside is the "bypass backoff" variant and breaks
+  // that ordering guarantee.
   return stmt(
     `
     update message_queue set status = case when status = 'pending' then
       case when route_thread = 1 then 'routing' else 'processing' end else status end,
-      attempts = attempts + 1
+      attempts = case when status = 'pending' then attempts + 1 else attempts end
     where rowid = (select rowid from message_queue
       where channel_jid = ? and status in ('pending', 'delivering')
       order by rowid limit 1)
