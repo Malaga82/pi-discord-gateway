@@ -195,7 +195,11 @@ export async function invokeAgent(
     'Spawning pi',
   );
 
-  return new Promise<AgentResult>((resolve, reject) => {
+  // Single-point propagation: every exit below (and any future one) picks
+  // up the attachment shortfall notice from the closure — per-literal fields
+  // are how the previous version lost three of eight paths, including the
+  // plain-text success fallback (STREAMING=off) that never carried it.
+  const result = await new Promise<AgentResult>((resolve, reject) => {
     // Own process group (POSIX): timeout/abort must take down the whole tree —
     // pi's bash grandchildren would otherwise survive a lone proc.kill().
     // ponytail ceiling: a SIGKILL of the gateway itself can orphan this group
@@ -355,13 +359,12 @@ export async function invokeAgent(
 
       if (sawJson) {
         if (finalText) {
-          resolve({ ok: true, text: finalText, attachmentNotice });
+          resolve({ ok: true, text: finalText });
         } else {
           const sessionError = readLatestAgentErrorFromSession(channelFolder);
           resolve({
             ok: false,
             text: '',
-            attachmentNotice,
             error:
               sessionError ||
               stderr.slice(0, 600) ||
@@ -392,6 +395,11 @@ export async function invokeAgent(
       reject(err);
     });
   });
+
+  // Only the reject path (spawn failure) escapes without the notice: the
+  // channel already gets an internal-error notice there, and no pi run
+  // happened for the attachments to matter.
+  return attachmentNotice !== undefined ? { ...result, attachmentNotice } : result;
 }
 
 /** Return the final answer text from an assistant message_end event, if any.

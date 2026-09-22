@@ -187,5 +187,47 @@ describe.skipIf(process.platform === 'win32')(
         delete process.env.SESSIONS_DIR;
       }
     });
+
+    it('carries the attachment shortfall notice through the plain-text path too', async () => {
+      // Regression for single-point propagation: the plain-text success
+      // fallback (STREAMING=off, or pi not emitting JSON) used to resolve
+      // without attachmentNotice, so the channel never learned that files
+      // were dropped — on a fully healthy run.
+      const dir = mkdtempSync(join(tmpdir(), 'pidg-plain-att-'));
+      try {
+        const fakePi = join(dir, 'fake-pi.sh');
+        writeFileSync(fakePi, '#!/bin/sh\necho "ok"\n');
+        chmodSync(fakePi, 0o755);
+
+        process.env.PI_BIN = fakePi;
+        process.env.SESSIONS_DIR = join(dir, 'sessions');
+
+        vi.resetModules();
+        vi.doMock('../src/session/media.js', () => ({
+          downloadAttachments: async () => [
+            {
+              filePath: join(dir, 'a.bin'),
+              originalName: 'a.bin',
+              size: 1,
+              contentType: 'application/octet-stream',
+            },
+          ],
+        }));
+        const { invokeAgent } = await import('../src/agent/invoke.js');
+        const result = await invokeAgent('ch_plain_att', 'hello', {
+          attachments: JSON.stringify([
+            { url: 'https://x/a.bin', name: 'a.bin', contentType: '', size: 1 },
+            { url: 'https://x/b.bin', name: 'b.bin', contentType: '', size: 1 },
+          ]),
+        });
+        expect(result.ok).toBe(true);
+        expect(result.attachmentNotice).toContain('Only 1 of 2 attachments');
+        vi.doUnmock('../src/session/media.js');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        delete process.env.PI_BIN;
+        delete process.env.SESSIONS_DIR;
+      }
+    });
   },
 );
