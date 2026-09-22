@@ -5,7 +5,7 @@ import { minimatch } from 'minimatch';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { THINKING_LEVELS, type ThinkingLevel } from '../types.js';
-import { resolvePiSpawn } from './pi-spawn.js';
+import { resolvePiSpawn, sanitizedChildEnv } from './pi-spawn.js';
 import { runProcess } from './subprocess.js';
 
 /** Catalog cache TTL from config (MODEL_CATALOG_TTL_MS, default 5 min): a
@@ -183,7 +183,13 @@ async function discoverCli(
 ): Promise<AvailableModelInfo[] | undefined> {
   const cliArgs = ['--list-models', ...config.piExtraFlags.split(/\s+/).filter(Boolean)];
   const { bin, args } = await resolvePiSpawn(config.piBin, cliArgs);
-  const result = await runProcess(bin, args, { cwd, signal, timeoutMs: LIST_MODELS_TIMEOUT_MS });
+  // --list-models loads user extensions/hooks: they must not see the token.
+  const result = await runProcess(bin, args, {
+    cwd,
+    signal,
+    timeoutMs: LIST_MODELS_TIMEOUT_MS,
+    env: sanitizedChildEnv(),
+  });
   return result.code === 0 && !result.error && !result.timedOut && !result.aborted
     ? parsePiModelList(result.stdout)
     : undefined;
@@ -204,6 +210,8 @@ async function discoverSdk(
       cwd,
       signal,
       timeoutMs: LIST_MODELS_TIMEOUT_MS,
+      // The probe loads the pi SDK, which can in turn load extension code.
+      env: sanitizedChildEnv(),
       onStdout: (chunk) => {
         pending += decoder.write(chunk);
         let newline: number;

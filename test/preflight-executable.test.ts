@@ -8,6 +8,7 @@ vi.mock('../src/agent/pi-spawn.js', () => ({
     bin: process.execPath,
     args: [fixture.path, ...args],
   }),
+  sanitizedChildEnv: () => ({ ...process.env }),
 }));
 import { checkPiExecutable, checkPiDependencies } from '../src/cli/preflight.js';
 let directory: string;

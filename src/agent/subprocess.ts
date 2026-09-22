@@ -21,6 +21,12 @@ export function runProcess(
     timeoutMs?: number;
     maxBytes?: number;
     onStdout?: (chunk: Buffer) => void;
+    /** Child environment. Defaults to the full parent env — pass
+     * sanitizedChildEnv() whenever the command can execute pi, which loads
+     * user extensions: an inherited DISCORD_BOT_TOKEN would be exfiltratable
+     * by a bare `env`. The supervisor fork gets it once and its own spawns
+     * inherit from there. */
+    env?: NodeJS.ProcessEnv;
   },
 ): Promise<ProcessResult> {
   if (options.signal?.aborted) {
@@ -38,6 +44,7 @@ export function runProcess(
       cwd: options.cwd,
       silent: true,
       execArgv: [],
+      env: options.env ?? process.env,
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];

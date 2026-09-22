@@ -49,7 +49,11 @@ export async function checkPiExecutable(
   const { resolvePiSpawn } = await import('../agent/pi-spawn.js');
   const { runProcess } = await import('../agent/subprocess.js');
   const command = await resolvePiSpawn(piBin, ['--version']);
-  const result = await runProcess(command.bin, command.args, { cwd, timeoutMs });
+  const result = await runProcess(command.bin, command.args, {
+    cwd,
+    timeoutMs,
+    env: (await import('../agent/pi-spawn.js')).sanitizedChildEnv(),
+  });
   if (result.timedOut) throw new Error(`PI_BIN (${piBin}) --version timed out.`);
   if (result.code !== 0 || result.error || result.aborted)
     throw new Error(
