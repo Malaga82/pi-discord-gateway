@@ -188,6 +188,10 @@ export const config = {
   /** Poll interval for message queue (ms) */
   pollInterval: envInt('POLL_INTERVAL_MS', 1000, { min: 1 }),
 
+  /** Model catalog cache TTL (ms). Each refresh spawns pi --list-models plus
+   * an SDK probe, so a too-short TTL costs two processes per cold message. */
+  modelCatalogTtlMs: envInt('MODEL_CATALOG_TTL_MS', 300_000, { min: 1_000 }),
+
   /** Graceful shutdown timeout before aborting in-flight tasks (ms) */
   shutdownTimeoutMs: envInt('SHUTDOWN_TIMEOUT_MS', 15_000, { min: 0 }),
 

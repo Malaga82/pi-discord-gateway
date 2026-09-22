@@ -8,7 +8,10 @@ import { THINKING_LEVELS, type ThinkingLevel } from '../types.js';
 import { resolvePiSpawn } from './pi-spawn.js';
 import { runProcess } from './subprocess.js';
 
-const CACHE_TTL_MS = 30_000;
+/** Catalog cache TTL from config (MODEL_CATALOG_TTL_MS, default 5 min): a
+ * refresh spawns pi --list-models plus an SDK probe, so the old hardcoded
+ * 30s meant two fresh processes per message on quiet channels. */
+const CACHE_TTL_MS = config.modelCatalogTtlMs;
 const LIST_MODELS_TIMEOUT_MS = 15_000;
 
 export interface AvailableModelInfo {
@@ -47,6 +50,7 @@ export class ModelCatalog {
   constructor(
     private sources: CatalogSources,
     private now = Date.now,
+    private ttlMs = CACHE_TTL_MS,
   ) {}
   private state(cwd: string): ModelCache {
     const key = resolve(cwd);
@@ -62,7 +66,7 @@ export class ModelCatalog {
   }
   stale(cwd: string): boolean {
     const state = this.state(cwd);
-    return !state.models || this.now() - state.loadedAt >= CACHE_TTL_MS;
+    return !state.models || this.now() - state.loadedAt >= this.ttlMs;
   }
   status(cwd: string): 'loading' | 'unavailable' | 'ready' | 'stale' {
     const state = this.state(cwd);
@@ -156,7 +160,7 @@ export class ModelCatalog {
         { cause: error },
       );
     } finally {
-      state.nextRetryAt = this.now() + CACHE_TTL_MS;
+      state.nextRetryAt = this.now() + this.ttlMs;
       const release = () => {
         const next = this.waiting.shift();
         if (next) next();

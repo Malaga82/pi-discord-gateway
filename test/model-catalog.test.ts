@@ -159,7 +159,7 @@ describe('asynchronous model discovery', () => {
   it('keeps stale data on failure, backs off, and accepts an authoritative empty result', async () => {
     let now = 100;
     const cli = vi.fn<() => Promise<AvailableModelInfo[] | undefined>>().mockResolvedValue(models);
-    const catalog = new ModelCatalog({ cli, sdk: async () => models }, () => now);
+    const catalog = new ModelCatalog({ cli, sdk: async () => models }, () => now, 30_000);
     await catalog.refresh('/a');
     now += 31_000;
     cli.mockResolvedValue(undefined);

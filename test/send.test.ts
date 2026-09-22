@@ -71,3 +71,35 @@ describe('validateSendRequest', () => {
     ).toThrow('File exceeds max attachment size (100 bytes): large.bin');
   });
 });
+
+describe('validateSendRequest total cap', () => {
+  it('rejects files that individually pass but exceed the total cap', () => {
+    expect(() =>
+      validateSendRequest(request(['a.bin', 'b.bin']), {
+        maxAttachmentBytes: 25 * 1024 * 1024,
+        maxTotalBytes: 30 * 1024 * 1024,
+        fileStat: () => ({ size: 20 * 1024 * 1024 }),
+      }),
+    ).toThrow('Total attachment size exceeds max');
+  });
+
+  it('passes when the total is within the cap', () => {
+    expect(() =>
+      validateSendRequest(request(['a.bin', 'b.bin']), {
+        maxAttachmentBytes: 25 * 1024 * 1024,
+        maxTotalBytes: 50 * 1024 * 1024,
+        fileStat: () => ({ size: 20 * 1024 * 1024 }),
+      }),
+    ).not.toThrow();
+  });
+
+  it('ignores the cap when it is disabled (0)', () => {
+    expect(() =>
+      validateSendRequest(request(['a.bin', 'b.bin']), {
+        maxAttachmentBytes: 0,
+        maxTotalBytes: 0,
+        fileStat: () => ({ size: 100 }),
+      }),
+    ).not.toThrow();
+  });
+});

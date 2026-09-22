@@ -1,5 +1,4 @@
 import { statSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { AttachmentBuilder, Client, GatewayIntentBits } from 'discord.js';
 import { config } from '../config.js';
@@ -17,7 +16,11 @@ export function normalizeChannelJid(input: string): string {
 
 export function validateSendRequest(
   request: SendRequest,
-  options: { maxAttachmentBytes: number; fileStat: (path: string) => { size: number } },
+  options: {
+    maxAttachmentBytes: number;
+    maxTotalBytes?: number;
+    fileStat: (path: string) => { size: number };
+  },
 ): void {
   const hasText = Boolean(request.text?.trim());
 
@@ -29,6 +32,7 @@ export function validateSendRequest(
     throw new Error('At most 10 files can be sent in a single message.');
   }
 
+  let totalBytes = 0;
   for (const filePath of request.files) {
     let file;
 
@@ -43,22 +47,33 @@ export function validateSendRequest(
         `File exceeds max attachment size (${options.maxAttachmentBytes} bytes): ${filePath}`,
       );
     }
+    totalBytes += file.size;
+  }
+
+  // Same total cap the ingress path enforces: without it 10 files just under
+  // the per-file limit all passed validation (and used to be read fully into
+  // the heap below).
+  const maxTotalBytes = options.maxTotalBytes ?? 0;
+  if (maxTotalBytes > 0 && totalBytes > maxTotalBytes) {
+    throw new Error(
+      `Total attachment size exceeds max (${maxTotalBytes} bytes): ${totalBytes} bytes requested.`,
+    );
   }
 }
 
 export async function sendFilesToDiscord(request: SendRequest): Promise<{ sentFiles: number }> {
   validateSendRequest(request, {
     maxAttachmentBytes: config.maxAttachmentBytes,
+    maxTotalBytes: config.maxTotalAttachmentBytes,
     fileStat: (filePath) => statSync(filePath),
   });
 
   const channelJid = normalizeChannelJid(request.channelJid);
   const channelId = channelJid.slice(3);
-  const attachments = await Promise.all(
-    request.files.map(
-      async (filePath) =>
-        new AttachmentBuilder(await readFile(filePath), { name: basename(filePath) }),
-    ),
+  // AttachmentBuilder accepts a path and streams on send: reading every file
+  // into memory first put the whole payload in the heap at once.
+  const attachments = request.files.map(
+    (filePath) => new AttachmentBuilder(filePath, { name: basename(filePath) }),
   );
 
   const client = new Client({
