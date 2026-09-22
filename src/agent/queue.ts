@@ -162,9 +162,13 @@ function poll(): void {
 /** Deliver pending task notices (interrupted / delivery_uncertain / failed):
  * the scrollback must tell the user what happened to their task. Best-effort
  * with a 5-minute backoff on failure — pendingNotices() already bounds the
- * batch to 20 and gates on notice_next_attempt_at. */
+ * batch to 20 and gates on notice_next_attempt_at. Each row is claimed
+ * (30s in-flight window) before the send: otherwise any send slower than
+ * the poll interval (429 backoff, 5xx, network latency) is re-picked next
+ * tick and the notice is delivered twice, each copy with its own retries. */
 function drainNotices(): void {
   for (const notice of pendingNotices()) {
+    postponeNotice(notice.rowid, 30_000);
     void sendResponse(notice.channel_jid, `⚠️ ${notice.notice_text}`)
       .then((sent) => {
         if (sent) markNoticeSent(notice.rowid);
