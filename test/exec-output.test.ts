@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -20,11 +20,15 @@ describe('readCommandOutput', () => {
   });
 
   it('argv form survives paths with spaces (shell form would split them)', () => {
-    const dir = join(mkdtempSync(join(tmpdir(), 'exec-out-')), 'with space');
+    const parent = mkdtempSync(join(tmpdir(), 'exec-out-'));
+    const dir = join(parent, 'with space');
     mkdirSync(dir, { recursive: true });
-    tempDirs.push(dir);
-    const bin = join(dir, 'node');
-    symlinkSync(process.execPath, bin);
+    tempDirs.push(parent);
+    // Symlinking (and hard-linking) node.exe needs elevation on Windows
+    // (EPERM against the Program Files ACLs); a copy works everywhere.
+    // The .exe extension is required for CreateProcess to run the file.
+    const bin = join(dir, process.platform === 'win32' ? 'node.exe' : 'node');
+    copyFileSync(process.execPath, bin);
     expect(readCommandOutput(bin, ['--version'])).toMatch(/^v\d/);
   });
 

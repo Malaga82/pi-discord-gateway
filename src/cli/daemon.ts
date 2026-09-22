@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readCommandOutput } from './exec-output.js';
 import { defaultDataDir, resolveConfigPath } from '../config.js';
@@ -125,15 +125,19 @@ export function buildPeerSymlinkExecStartPre(
     if (globalRoot === undefined) return undefined;
   }
 
-  const peerDir = join(globalRoot, '@earendil-works');
-  const codingAgent = join(peerDir, 'pi-coding-agent');
+  // posix.join on purpose: these strings are executed by /bin/sh inside a
+  // systemd unit at service start — POSIX paths are the contract, not the
+  // local platform's separator. exists()/resolve() accept forward slashes on
+  // win32 too, so the probes keep working on any platform.
+  const peerDir = posix.join(globalRoot, '@earendil-works');
+  const codingAgent = posix.join(peerDir, 'pi-coding-agent');
   if (!exists(codingAgent)) return undefined;
 
-  const piAiNested = join(codingAgent, 'node_modules', '@earendil-works', 'pi-ai');
-  const piAiTop = join(peerDir, 'pi-ai');
+  const piAiNested = posix.join(codingAgent, 'node_modules', '@earendil-works', 'pi-ai');
+  const piAiTop = posix.join(peerDir, 'pi-ai');
   const piAi = exists(piAiNested) ? piAiNested : exists(piAiTop) ? piAiTop : undefined;
 
-  const linkDir = join(nodeModulesRoot, '@earendil-works');
+  const linkDir = posix.join(nodeModulesRoot, '@earendil-works');
   // npm-global install: piscord lives in the same node_modules as its peers,
   // so the "symlink" would rm -rf the real package. Nothing to link.
   if (resolve(linkDir) === resolve(peerDir)) return undefined;
@@ -141,11 +145,11 @@ export function buildPeerSymlinkExecStartPre(
   // rm -rf first: `ln -sfn` on an existing REAL directory would nest the
   // symlink inside it instead of replacing it.
   const links = [
-    `rm -rf ${q(join(linkDir, 'pi-coding-agent'))} && ln -sfn ${q(codingAgent)} ${q(join(linkDir, 'pi-coding-agent'))}`,
+    `rm -rf ${q(posix.join(linkDir, 'pi-coding-agent'))} && ln -sfn ${q(codingAgent)} ${q(posix.join(linkDir, 'pi-coding-agent'))}`,
   ];
   if (piAi) {
     links.push(
-      `rm -rf ${q(join(linkDir, 'pi-ai'))} && ln -sfn ${q(piAi)} ${q(join(linkDir, 'pi-ai'))}`,
+      `rm -rf ${q(posix.join(linkDir, 'pi-ai'))} && ln -sfn ${q(piAi)} ${q(posix.join(linkDir, 'pi-ai'))}`,
     );
   }
 

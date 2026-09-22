@@ -132,7 +132,7 @@ describe('recordBotPeerMessage (loop guard)', () => {
   });
 });
 
-describe('invokeAgent timeout (P11)', () => {
+describe.skipIf(process.platform === 'win32')('invokeAgent timeout (P11)', () => {
   it('kills a hung pi, flags timedOut and reports a timeout error', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'pidg-timeout-'));
     try {
@@ -159,30 +159,33 @@ describe('invokeAgent timeout (P11)', () => {
   });
 });
 
-describe('plain-text fallback with streaming consumer (R2)', () => {
-  it('recovers the plain-text answer when pi ignores --mode json', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'pidg-plain-'));
-    try {
-      const fakePi = join(dir, 'fake-pi.sh');
-      writeFileSync(fakePi, '#!/bin/sh\necho "risposta in chiaro"\n');
-      chmodSync(fakePi, 0o755);
+describe.skipIf(process.platform === 'win32')(
+  'plain-text fallback with streaming consumer (R2)',
+  () => {
+    it('recovers the plain-text answer when pi ignores --mode json', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'pidg-plain-'));
+      try {
+        const fakePi = join(dir, 'fake-pi.sh');
+        writeFileSync(fakePi, '#!/bin/sh\necho "risposta in chiaro"\n');
+        chmodSync(fakePi, 0o755);
 
-      process.env.PI_BIN = fakePi;
-      process.env.SESSIONS_DIR = join(dir, 'sessions');
+        process.env.PI_BIN = fakePi;
+        process.env.SESSIONS_DIR = join(dir, 'sessions');
 
-      vi.resetModules();
-      const { invokeAgent } = await import('../src/agent/invoke.js');
-      const events: unknown[] = [];
-      const result = await invokeAgent('ch_plain', 'hello', {
-        onEvent: (event) => events.push(event),
-      });
-      expect(result.ok).toBe(true);
-      expect(result.text).toBe('risposta in chiaro');
-      expect(events).toHaveLength(0); // no JSON events were produced
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-      delete process.env.PI_BIN;
-      delete process.env.SESSIONS_DIR;
-    }
-  });
-});
+        vi.resetModules();
+        const { invokeAgent } = await import('../src/agent/invoke.js');
+        const events: unknown[] = [];
+        const result = await invokeAgent('ch_plain', 'hello', {
+          onEvent: (event) => events.push(event),
+        });
+        expect(result.ok).toBe(true);
+        expect(result.text).toBe('risposta in chiaro');
+        expect(events).toHaveLength(0); // no JSON events were produced
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        delete process.env.PI_BIN;
+        delete process.env.SESSIONS_DIR;
+      }
+    });
+  },
+);
