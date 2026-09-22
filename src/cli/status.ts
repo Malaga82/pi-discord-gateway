@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
-import { readCommandOutput } from './exec-output.js';
+import { findExecutable, readCommandOutput } from './exec-output.js';
 import { config, resolveConfigPath } from '../config.js';
 import { closeDb, getAllChannels, initDb } from '../db.js';
 
@@ -16,9 +16,11 @@ export function runStatus(): void {
   const configPath = resolveConfigPath();
   // Honor the same resolution the gateway and setup use: a relocated auth
   // dir (PI_CODING_AGENT_DIR) or a custom binary (PI_BIN) must not make
-  // status report 'missing'/'not found' on a healthy gateway.
-  const piPath = findExecutable(config.piBin) ?? config.piBin;
-  const piVersion = piPath ? readCommandOutput(`${config.piBin} --version`) : undefined;
+  // status report 'missing'/'not found' on a healthy gateway. The fallback
+  // stays OUT of the displayed value: 'not found (pi)' must stay reachable
+  // when the lookup fails, otherwise status loses its main diagnostic.
+  const piPath = findExecutable(config.piBin);
+  const piVersion = piPath ? readCommandOutput(piPath, ['--version']) : undefined;
   const authStatus = existsSync(AUTH_PATH);
   const serviceStatus = getServiceStatus();
   const channelCount = getRegisteredChannelCount();
@@ -28,7 +30,7 @@ export function runStatus(): void {
   const lines = [
     'piscord status',
     '',
-    `Pi binary: ${piPath || 'not found'}`,
+    `Pi binary: ${piPath || `not found (${config.piBin})`}`,
     `Pi version: ${piVersion || 'unknown'}`,
     `Pi auth: ${authStatus ? `found (${AUTH_PATH})` : `missing (${AUTH_PATH})`}`,
     `Pi working dir: ${config.piCwd}`,
@@ -116,9 +118,4 @@ function countSessionFolders(baseDir: string): number {
   }
 
   return count;
-}
-
-function findExecutable(name: string): string | undefined {
-  const cmd = process.platform === 'win32' ? 'where' : 'which';
-  return readCommandOutput(`${cmd} ${name}`);
 }
