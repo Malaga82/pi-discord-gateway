@@ -12,3 +12,20 @@ describe('durable message body', () => {
     });
   });
 });
+
+describe('skippedAttachmentsNotice', () => {
+  it('returns undefined when nothing was rejected', async () => {
+    const { skippedAttachmentsNotice } = await import('../src/discord/client.js');
+    expect(skippedAttachmentsNotice([])).toBeUndefined();
+  });
+
+  it('lists skipped attachment names for the channel', async () => {
+    const { skippedAttachmentsNotice } = await import('../src/discord/client.js');
+    expect(
+      skippedAttachmentsNotice([
+        { attachment: { name: 'big.mov' } },
+        { attachment: { name: 'huge.zip' } },
+      ]),
+    ).toBe('⚠️ Skipped 2 attachment(s) over the size limit: big.mov, huge.zip.');
+  });
+});

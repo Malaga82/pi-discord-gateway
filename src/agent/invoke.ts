@@ -151,7 +151,18 @@ export async function invokeAgent(
       const metas: AttachmentMeta[] = JSON.parse(opts.attachments);
       const messageId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       const downloaded = await downloadAttachments(metas, channelFolder, messageId, opts.signal);
-      attachmentPrompt = buildAttachmentPathPrompt(downloaded);
+      let prompt = buildAttachmentPathPrompt(downloaded);
+      // downloadAttachments filters per-file failures and returns the partial:
+      // surface the shortfall to the model so it can tell the user, otherwise
+      // pi silently worked with fewer files than were sent.
+      if (downloaded.length < metas.length) {
+        prompt += `\n(Note: only ${downloaded.length} of ${metas.length} attachments downloaded successfully; tell the user which files are missing.)`;
+        logger.warn(
+          { downloaded: downloaded.length, total: metas.length },
+          'Some attachments failed to download',
+        );
+      }
+      attachmentPrompt = prompt;
       if (downloaded.length > 0) {
         logger.info({ channelFolder, count: downloaded.length }, 'Downloaded files for pi');
       }

@@ -211,6 +211,7 @@ async function handleMessage(message: Message): Promise<void> {
   // Attachments → extract metadata for downstream download
   let acceptedAttachments: AttachmentMeta[] = [];
   let attachmentsJson: string | null = null;
+  let attachmentSelection: ReturnType<typeof selectAttachmentsWithinLimits> | undefined;
   if (message.attachments.size > 0) {
     const metas: AttachmentMeta[] = [...message.attachments.values()].map((att) => ({
       url: att.url,
@@ -219,17 +220,17 @@ async function handleMessage(message: Message): Promise<void> {
       size: att.size || 0,
     }));
 
-    const selection = selectAttachmentsWithinLimits(metas, {
+    attachmentSelection = selectAttachmentsWithinLimits(metas, {
       maxFileBytes: config.maxAttachmentBytes,
       maxTotalBytes: config.maxTotalAttachmentBytes,
     });
 
-    acceptedAttachments = selection.accepted;
-    if (selection.rejected.length > 0) {
+    acceptedAttachments = attachmentSelection.accepted;
+    if (attachmentSelection.rejected.length > 0) {
       logger.info(
         {
           jid,
-          skipped: selection.rejected.map(({ attachment, reason, limitBytes }) => ({
+          skipped: attachmentSelection.rejected.map(({ attachment, reason, limitBytes }) => ({
             name: attachment.name,
             size: attachment.size,
             reason,
@@ -344,6 +345,16 @@ async function handleMessage(message: Message): Promise<void> {
   // non-empty string "[Reply to Bot] " and trigger a full pi run on nothing.
   if (!content) return;
 
+  // Tell the channel about attachments dropped at the gate. Without this the
+  // only trace was a server-side log: pi ran without the file (or the whole
+  // attachment-only message silently vanished) and the user never knew.
+  const skippedNotice = skippedAttachmentsNotice(attachmentSelection?.rejected ?? []);
+  if (skippedNotice) {
+    await message
+      .reply({ content: skippedNotice, allowedMentions: { parse: [] } })
+      .catch(() => undefined);
+  }
+
   // ── Enqueue ──
   enqueueMessage({
     channelJid: jid,
@@ -440,6 +451,16 @@ export function buildDurableMessageBody(
   allowed_mentions: { parse: string[] };
 } {
   return { content, nonce, enforce_nonce: true, allowed_mentions: { parse: [] } };
+}
+
+/** User-facing notice for attachments rejected by the ingress size gate.
+ * Returns undefined when nothing was rejected. */
+export function skippedAttachmentsNotice(
+  rejected: ReadonlyArray<{ attachment: { name: string } }>,
+): string | undefined {
+  if (rejected.length === 0) return undefined;
+  const names = rejected.map(({ attachment }) => attachment.name).join(', ');
+  return `⚠️ Skipped ${rejected.length} attachment(s) over the size limit: ${names}.`;
 }
 
 export const deliveryTransport: DeliveryTransport = {
