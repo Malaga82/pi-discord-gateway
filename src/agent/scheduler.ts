@@ -76,6 +76,16 @@ function enqueueDueTasks(): void {
 }
 
 function enqueueDueTask(task: ScheduledTaskRow, now: string): void {
+  const nextRunAt = computeNextRun(task.schedule, task.type);
+  if (nextRunAt === null) {
+    // updateTaskAfterRun disables the task (enabled = 0) when there is no
+    // next run. Without this line the task died silently: no warn, no
+    // notice, nothing in `piscord task list` beyond the flag flip.
+    logger.warn(
+      { taskId: task.id, schedule: task.schedule },
+      'Scheduled task has no next run for its schedule and is now disabled',
+    );
+  }
   enqueueScheduledTask(
     task.id,
     {
@@ -86,6 +96,6 @@ function enqueueDueTask(task: ScheduledTaskRow, now: string): void {
       timestamp: now,
     },
     now,
-    computeNextRun(task.schedule, task.type),
+    nextRunAt,
   );
 }

@@ -82,3 +82,42 @@ describe('scheduled task db helpers', () => {
     }
   });
 });
+
+describe('silent cron disable observability', () => {
+  it('warns when a due task has no next run and gets disabled', async () => {
+    process.env.DB_PATH = ':memory:';
+    vi.stubEnv('LOG_LEVEL', 'silent');
+    vi.resetModules();
+    const db = await import('../src/db.js');
+    const { logger } = await import('../src/logger.js');
+    const { startScheduler } = await import('../src/agent/scheduler.js');
+    db.initDb();
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      // 30 February never exists: croner yields no next run, and
+      // updateTaskAfterRun flips enabled = 0. The warn is the only signal.
+      db.addScheduledTask({
+        name: 'impossible',
+        type: 'recurring',
+        schedule: '0 0 30 2 *',
+        channelJid: 'dc:123',
+        prompt: 'never',
+        createdBy: 'tester',
+        nextRunAt: new Date(Date.now() - 1000).toISOString(),
+      });
+      const stop = startScheduler();
+      stop();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: expect.any(Number), schedule: '0 0 30 2 *' }),
+        'Scheduled task has no next run for its schedule and is now disabled',
+      );
+      expect(db.getScheduledTask?.(1) ?? db.listScheduledTasks()[0]).toMatchObject({
+        enabled: 0,
+      });
+    } finally {
+      warnSpy.mockRestore();
+      db.closeDb();
+      vi.unstubAllEnvs();
+    }
+  });
+});

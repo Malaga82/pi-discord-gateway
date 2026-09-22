@@ -6,13 +6,19 @@ import { readCommandOutput } from './exec-output.js';
 import { config, resolveConfigPath } from '../config.js';
 import { closeDb, getAllChannels, initDb } from '../db.js';
 
-const AUTH_PATH = resolve(homedir(), '.pi/agent/auth.json');
+const AUTH_PATH = resolve(
+  process.env.PI_CODING_AGENT_DIR || resolve(homedir(), '.pi/agent'),
+  'auth.json',
+);
 const SERVICE_NAME = 'pi-discord-gateway';
 
 export function runStatus(): void {
   const configPath = resolveConfigPath();
-  const piPath = findExecutable('pi');
-  const piVersion = piPath ? readCommandOutput('pi --version') : undefined;
+  // Honor the same resolution the gateway and setup use: a relocated auth
+  // dir (PI_CODING_AGENT_DIR) or a custom binary (PI_BIN) must not make
+  // status report 'missing'/'not found' on a healthy gateway.
+  const piPath = findExecutable(config.piBin) ?? config.piBin;
+  const piVersion = piPath ? readCommandOutput(`${config.piBin} --version`) : undefined;
   const authStatus = existsSync(AUTH_PATH);
   const serviceStatus = getServiceStatus();
   const channelCount = getRegisteredChannelCount();
