@@ -13,7 +13,7 @@
 
 A lightweight Discord gateway for [pi coding agent](https://github.com/badlogic/pi-mono). SQLite-backed queue, per-channel session isolation, crash recovery, abort support. One command to set up, runs as a daemon, and keeps task and delivery state across restarts.
 
-**Latest release: 2.0.0.** Requires Node.js ≥22.19.0 and pi ≥0.83.0 <0.87.0. See [upgrade and recovery](#task-recovery-and-delivery) before updating from 1.x, and [Changelog](./CHANGELOG.md) for details.
+**Latest release: 2.0.0.** Requires Node.js ≥22.19.0 and pi ≥0.83.0 <0.88.0. See [upgrade and recovery](#task-recovery-and-delivery) before updating from 1.x, and [Changelog](./CHANGELOG.md) for details.
 
 ```bash
 npm install -g piscord
@@ -26,7 +26,7 @@ That's it. The setup wizard checks prerequisites, asks for your Discord bot toke
 
 - **Node.js** ≥ 22.19.0 (floor imposed by the pi peer packages, not by gateway code)
 - **Linux, macOS, or Windows**
-- **[pi](https://github.com/earendil-works/pi)** ≥ 0.83.0 and < 0.87.0 installed and on `PATH` (recommended: 0.86.0), with a configured provider (`~/.pi/agent/auth.json`)
+- **[pi](https://github.com/earendil-works/pi)** ≥ 0.83.0 and < 0.88.0 installed and on `PATH` (recommended: 0.87.0), with a configured provider (`~/.pi/agent/auth.json`)
 
 - **Discord bot token** — [create one here](https://discord.com/developers/applications)
   - Enable **Message Content Intent** under Privileged Gateway Intents

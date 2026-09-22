@@ -46,8 +46,8 @@
     "test:compat": "npm run build && node scripts/compat-smoke.mjs"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.83.0 <0.87.0",
-    "@earendil-works/pi-coding-agent": ">=0.83.0 <0.87.0"
+    "@earendil-works/pi-ai": ">=0.83.0 <0.88.0",
+    "@earendil-works/pi-coding-agent": ">=0.83.0 <0.88.0"
   },
   "dependencies": {
     "@clack/prompts": "^0.11.0",
