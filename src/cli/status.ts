@@ -20,7 +20,11 @@ export function runStatus(): void {
   // stays OUT of the displayed value: 'not found (pi)' must stay reachable
   // when the lookup fails, otherwise status loses its main diagnostic.
   const piPath = findExecutable(config.piBin);
-  const piVersion = piPath ? readCommandOutput(piPath, ['--version']) : undefined;
+  // Version probe goes through the shell with a quoted path: npm installs on
+  // Windows are .cmd shims, and spawning a batch file without a shell throws
+  // EINVAL (Node's CVE-2024-27980 batch guard). piPath comes from where/which
+  // output, not raw operator input, and the quotes keep spaces safe.
+  const piVersion = piPath ? readCommandOutput(`"${piPath}" --version`) : undefined;
   const authStatus = existsSync(AUTH_PATH);
   const serviceStatus = getServiceStatus();
   const channelCount = getRegisteredChannelCount();

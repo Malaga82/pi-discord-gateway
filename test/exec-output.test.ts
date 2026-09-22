@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { readCommandOutput } from '../src/cli/exec-output.js';
+import { findExecutable, readCommandOutput } from '../src/cli/exec-output.js';
 
 const tempDirs: string[] = [];
 
@@ -34,5 +34,19 @@ describe('readCommandOutput', () => {
     const script = join(dir, 'fail.cjs');
     writeFileSync(script, 'console.error("probe-err"); process.exit(1);');
     expect(readCommandOutput(process.execPath, [script])).toBe('probe-err');
+  });
+});
+
+describe('findExecutable', () => {
+  it('returns undefined for a missing binary — exit status decides, not stderr', () => {
+    // A failed lookup prints localized diagnostics to stderr (Windows
+    // "INFORMAZIONI: …", GNU which's message); none of that is a result.
+    expect(findExecutable('definitely-not-a-binary-xyz')).toBeUndefined();
+  });
+
+  it('returns one existing path (first line only, no CR/LF)', () => {
+    const found = findExecutable('node');
+    expect(found).toBeTruthy();
+    expect(found).not.toMatch(/[\r\n]/);
   });
 });

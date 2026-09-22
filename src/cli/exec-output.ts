@@ -50,8 +50,21 @@ export function readCommandOutput(command: string, args?: string[]): string | un
   }
 }
 
-/** Locate an executable by name (or absolute path) via PATH lookup. */
+/** Locate an executable by name (or absolute path) via PATH lookup.
+ * Decides on the exit status and keeps the FIRST line only: `where` prints
+ * every shim (pi, pi.cmd, …) and localized diagnostics to stderr on
+ * failure — neither the error text nor the extra lines are a result. Do not
+ * route this through readCommandOutput: its failure fallback merges stderr,
+ * which here is the error, not the answer. */
 export function findExecutable(name: string): string | undefined {
   const cmd = process.platform === 'win32' ? 'where' : 'which';
-  return readCommandOutput(cmd, [name]);
+  try {
+    const out = execFileSync(cmd, [name], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return out.split(/\r?\n/)[0]?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
 }
