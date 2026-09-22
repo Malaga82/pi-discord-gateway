@@ -88,4 +88,84 @@ describe('purgeOldMessages', () => {
       db.closeDb();
     }
   });
+
+  it('purges every terminal status and orphan-free chunks, keeps live rows', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'pidg-retention-'));
+    tempDirs.push(tempDir);
+    process.env.DB_PATH = join(tempDir, 'gateway.db');
+
+    vi.resetModules();
+    const db = await import('../src/db.js');
+    db.initDb();
+
+    try {
+      const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .slice(0, 19)
+        .replace('T', ' ');
+      const raw = new Database(process.env.DB_PATH!);
+      try {
+        const oldRowids: number[] = [];
+        const statuses = [
+          'done',
+          'failed',
+          'interrupted',
+          'cancelled',
+          'delivery_failed',
+          'delivery_uncertain',
+        ];
+        const insertOld = raw.prepare(
+          "insert into message_queue (channel_jid, sender, sender_name, content, timestamp, status, processed_at) values ('dc:a','u','u',?,?,'done',?)",
+        );
+        for (const status of statuses) {
+          const info = insertOld.run(status, old, old);
+          oldRowids.push(Number(info.lastInsertRowid));
+        }
+        // The prepared insert pins status='done' (needed for FK-less chunk
+        // setup); give each row its real terminal status now.
+        raw
+          .prepare(
+            `update message_queue set status = case rowid ${statuses
+              .map((s, i) => `when ${oldRowids[i]} then '${s}'`)
+              .join(' ')} end where rowid in (${oldRowids.map(() => '?').join(',')})`,
+          )
+          .run(...oldRowids);
+
+        // Chunks on an old row (parent purged) and on a fresh done row
+        // (parent kept): only the orphaned side may disappear.
+        const chunkInsert = raw.prepare(
+          "insert into response_chunks (queue_id, part, content, nonce) values (?, 0, 'part', 'n')",
+        );
+        for (const parent of oldRowids) chunkInsert.run(parent);
+        const fresh = raw
+          .prepare(
+            "insert into message_queue (channel_jid, sender, sender_name, content, timestamp, status, processed_at) values ('dc:a','u','u','fresh-done',datetime('now'),'done',datetime('now'))",
+          )
+          .run();
+        chunkInsert.run(Number(fresh.lastInsertRowid));
+        raw
+          .prepare(
+            "insert into message_queue (channel_jid, sender, sender_name, content, timestamp, status) values ('dc:a','u','u','pending-live',datetime('now'),'pending')",
+          )
+          .run();
+
+        const purged = await db.purgeOldMessages(30);
+        expect(purged.queue).toBe(oldRowids.length);
+
+        const remaining = (
+          raw.prepare('select content from message_queue').all() as Array<{ content: string }>
+        ).map((r) => r.content);
+        expect(remaining.sort()).toEqual(['fresh-done', 'pending-live']);
+
+        const chunkParents = (
+          raw.prepare('select queue_id from response_chunks').all() as Array<{ queue_id: number }>
+        ).map((r) => Number(r.queue_id));
+        expect(chunkParents).toEqual([Number(fresh.lastInsertRowid)]);
+      } finally {
+        raw.close();
+      }
+    } finally {
+      db.closeDb();
+    }
+  });
 });

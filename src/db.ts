@@ -373,7 +373,7 @@ export function recoverStuckMessages(): {
     // Execution started, result unknown: report, never rerun (README restart
     // table). The notice carries the task id so `piscord result` stays usable.
     const interrupted = stmt(
-      `update message_queue set status = 'interrupted', notice_text =
+      `update message_queue set status = 'interrupted', processed_at = datetime('now'), notice_text =
       'Task #' || rowid || ': the gateway restarted during this task. Some operations may have completed. Check the result before submitting it again.'
       where status = 'processing'`,
     ).run().changes;
@@ -652,47 +652,65 @@ export async function purgeOldMessages(
   }
 
   const cutoff = `-${retentionDays} days`;
-  // One explicit transaction with yields between batches: batching shrinks the
-  // max event-loop block (~491ms → ~16ms at 500k rows), NOT the total — one
-  // db.transaction() per batch would multiply fsyncs (+392% measured).
-  db.exec('BEGIN');
-  try {
-    let queue = 0;
-    for (;;) {
-      const deleted = stmt(
-        `delete from message_queue where rowid in (
-           select rowid from message_queue
-           where status in ('done', 'failed') and processed_at is not null
+  // Every terminal status: done/failed, restart recovery (interrupted),
+  // /pi stop (cancelled) and the two delivery outcomes. Anything missing
+  // here grows the table forever.
+  const TERMINAL_STATUS =
+    "('done', 'failed', 'interrupted', 'cancelled', 'delivery_failed', 'delivery_uncertain')";
+  // One db.transaction() per batch, no await inside: batching shrinks the
+  // max event-loop block (~491ms → ~16ms at 500k rows). The former single
+  // transaction stayed open across the batch yields, so enqueues landing in
+  // those windows were swept into the purge and lost on a mid-purge rollback
+  // — the hasActiveTasks() guard cannot see those enqueues (they arrive from
+  // Discord events, not from running tasks). The per-batch COMMIT multiplies
+  // fsyncs (+392% measured); that cost is accepted in exchange for never
+  // losing live messages to the purge.
+  const purgeQueueBatch = (): number =>
+    db.transaction(() => {
+      const rowids = (
+        stmt(
+          `select rowid from message_queue
+           where status in ${TERMINAL_STATUS} and processed_at is not null
              and processed_at < datetime('now', ?)
-           limit ${PURGE_BATCH}
-         )`,
-      ).run(cutoff).changes;
-      queue += deleted;
-      if (deleted < PURGE_BATCH) break;
-      await new Promise((r) => setImmediate(r));
-    }
+           limit ${PURGE_BATCH}`,
+        ).all(cutoff) as Array<{ rowid: number }>
+      ).map((row) => Number(row.rowid));
+      if (rowids.length === 0) return 0;
+      // Chunks have no FK cascade: delete them before their parents, or a
+      // purged queue row orphans its response_chunks forever.
+      const placeholders = rowids.map(() => '?').join(',');
+      stmt(`delete from response_chunks where queue_id in (${placeholders})`).run(...rowids);
+      return stmt(`delete from message_queue where rowid in (${placeholders})`).run(...rowids)
+        .changes;
+    })();
 
-    let log = 0;
-    for (;;) {
-      const deleted = stmt(
-        `delete from message_log where rowid in (
-           select rowid from message_log
-           where timestamp < datetime('now', ?)
-           limit ${PURGE_BATCH}
-         )`,
-      ).run(cutoff).changes;
-      log += deleted;
-      if (deleted < PURGE_BATCH) break;
-      await new Promise((r) => setImmediate(r));
-    }
-
-    db.exec('COMMIT');
-    if (queue > 0 || log > 0) {
-      logger.info({ queue, log }, 'Purged old queue/log rows');
-    }
-    return { queue, log };
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
+  let queue = 0;
+  for (;;) {
+    const deleted = purgeQueueBatch();
+    queue += deleted;
+    if (deleted < PURGE_BATCH) break;
+    await new Promise((r) => setImmediate(r));
   }
+
+  let log = 0;
+  for (;;) {
+    const deleted = db.transaction(
+      () =>
+        stmt(
+          `delete from message_log where rowid in (
+             select rowid from message_log
+             where timestamp < datetime('now', ?)
+             limit ${PURGE_BATCH}
+           )`,
+        ).run(cutoff).changes,
+    )();
+    log += deleted;
+    if (deleted < PURGE_BATCH) break;
+    await new Promise((r) => setImmediate(r));
+  }
+
+  if (queue > 0 || log > 0) {
+    logger.info({ queue, log }, 'Purged old queue/log rows');
+  }
+  return { queue, log };
 }
