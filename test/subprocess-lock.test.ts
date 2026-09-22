@@ -270,7 +270,8 @@ describe('gateway instance lock', () => {
     const compromised = () => {
       throw new Error('Unexpected lock compromise');
     };
-    // Live local owner path.
+    // Live local owner path: the only throw with PROOF another process is
+    // alive. Clean exit is correct here and only here.
     const path = join(dir, 'gateway.db');
     writeFileSync(path, '');
     const release = await acquireInstanceLock(path, compromised);
@@ -281,7 +282,11 @@ describe('gateway instance lock', () => {
     await release();
     expect(second).toBeInstanceOf(InstanceLockHeldError);
 
-    // Fresh foreign renewable-lock path.
+    // Fresh foreign renewable-lock path (the post-crash stale window): a
+    // plain Error, NOT InstanceLockHeldError — under Restart=on-failure a
+    // clean exit here stops the retries and the gateway stays down forever
+    // with a green unit. It must exit non-zero so systemd keeps trying until
+    // the lock goes stale.
     const other = join(dir, 'other.db');
     writeFileSync(other, '');
     writeFileSync(
@@ -289,8 +294,34 @@ describe('gateway instance lock', () => {
       JSON.stringify({ pid: process.pid, host: `${hostname()}-elsewhere`, token: 'x' }),
     );
     mkdirSync(`${other}.lock`);
-    await expect(acquireInstanceLock(other, compromised)).rejects.toBeInstanceOf(
-      InstanceLockHeldError,
+    const failure = await acquireInstanceLock(other, compromised).then(
+      () => null,
+      (error) => error,
     );
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).not.toBeInstanceOf(InstanceLockHeldError);
+    expect(failure?.message).toContain('lock has not expired');
+  });
+});
+
+describe('runProcess env isolation', () => {
+  it('forwards a sanitized env to the supervised child (token must not leak)', async () => {
+    const dir = directory();
+    const script = join(dir, 'env-probe.cjs');
+    writeFileSync(
+      script,
+      'console.log(process.env.DISCORD_BOT_TOKEN === undefined ? "CLEAN" : "LEAKED");',
+    );
+    process.env.DISCORD_BOT_TOKEN = 'secret-token-do-not-print';
+    try {
+      const { sanitizedChildEnv } = await import('../src/agent/pi-spawn.js');
+      const result = await runProcess(process.execPath, [script], {
+        cwd: dir,
+        env: sanitizedChildEnv(),
+      });
+      expect(result.stdout).toBe('CLEAN');
+    } finally {
+      delete process.env.DISCORD_BOT_TOKEN;
+    }
   });
 });

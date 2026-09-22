@@ -91,7 +91,15 @@ export async function acquireInstanceLock(
       }
     };
   } catch (error) {
-    throw new InstanceLockHeldError(
+    // Deliberately a plain Error, NOT InstanceLockHeldError: this catch also
+    // covers ELOCKED inside the 30s stale window after a crash — exactly when
+    // systemd's Restart=on-failure fires (RestartSec=10). A clean exit there
+    // would stop the retries and leave the gateway down indefinitely with a
+    // green unit. Exiting non-zero lets systemd retry every RestartSec until
+    // the lock goes stale (~3 attempts), then the gateway recovers alone.
+    // It also covers EACCES/ENOSPC/EROFS on the lockdir: those are failures,
+    // not "another owner".
+    throw new Error(
       'Another gateway owns this database, or its lock has not expired yet. After a crash, wait 30 seconds before restarting.',
       { cause: error },
     );
