@@ -1,13 +1,6 @@
 import { spawn } from 'node:child_process';
-import {
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  closeSync,
-  fstatSync,
-  readSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, openSync, closeSync, fstatSync, readSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { StringDecoder } from 'node:string_decoder';
 import { type AttachmentMeta } from '../discord/attachments.js';
 import { config } from '../config.js';
@@ -139,6 +132,7 @@ export async function invokeAgent(
   }
 
   let attachmentPrompt = '';
+  let attachmentNotice: string | undefined;
 
   // Download attachments to disk and pass *paths* to the agent instead of using
   // `@file` arguments. `@file` eagerly injects file contents into the model
@@ -157,6 +151,7 @@ export async function invokeAgent(
       // pi silently worked with fewer files than were sent.
       if (downloaded.length < metas.length) {
         prompt += `\n(Note: only ${downloaded.length} of ${metas.length} attachments downloaded successfully; tell the user which files are missing.)`;
+        attachmentNotice = `Only ${downloaded.length} of ${metas.length} attachments could be downloaded; the rest failed.`;
         logger.warn(
           { downloaded: downloaded.length, total: metas.length },
           'Some attachments failed to download',
@@ -168,6 +163,8 @@ export async function invokeAgent(
       }
     } catch (err: any) {
       logger.warn({ err: err.message }, 'Failed to process attachments');
+      // Rare (malformed attachments JSON): tell the channel, not only the log.
+      attachmentNotice = 'Attachments could not be processed; none were used.';
     }
   }
 
@@ -358,12 +355,13 @@ export async function invokeAgent(
 
       if (sawJson) {
         if (finalText) {
-          resolve({ ok: true, text: finalText });
+          resolve({ ok: true, text: finalText, attachmentNotice });
         } else {
           const sessionError = readLatestAgentErrorFromSession(channelFolder);
           resolve({
             ok: false,
             text: '',
+            attachmentNotice,
             error:
               sessionError ||
               stderr.slice(0, 600) ||
@@ -535,7 +533,7 @@ export async function getChannelSessionStatus(
     return {
       sessionFile,
       createdAt,
-      tokens: readSessionTokensFromJsonl(sessionFile),
+      tokens: await readSessionTokensFromJsonl(sessionFile),
       statsSource: 'jsonl',
     };
   }
@@ -687,13 +685,14 @@ function readTailLines(sessionFile: string, maxBytes: number): string[] {
   }
 }
 
-function readSessionTokensFromJsonl(sessionFile: string): SessionTokenUsage {
+async function readSessionTokensFromJsonl(sessionFile: string): Promise<SessionTokenUsage> {
   const totals: SessionTokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
   // Cold path (/pi status only): whole-file read is acceptable, token totals
-  // need every line anyway. ponytail: stream if sessions grow huge.
+  // need every line anyway. Async read keeps the I/O off the event loop;
+  // ponytail: stream with readline if sessions ever stop fitting in RAM.
   let lines: string[];
   try {
-    lines = readFileSync(sessionFile, 'utf-8').split(/\r?\n/u);
+    lines = (await readFile(sessionFile, 'utf-8')).split(/\r?\n/u);
   } catch {
     return totals; // file vanished between listing and reading — report zeros
   }

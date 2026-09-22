@@ -63,4 +63,7 @@ export interface AgentResult {
   timedOut?: boolean;
   /** Upstream runProcess semantics (mapped from killed/timedOut equivalents) */
   reason?: 'cancelled' | 'timeout';
+  /** Attachments were dropped or partially downloaded: surfaced to the
+   * channel as a queue notice regardless of how the run ends. */
+  attachmentNotice?: string;
 }

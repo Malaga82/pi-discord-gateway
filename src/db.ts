@@ -421,6 +421,12 @@ export function pendingNotices(): Array<{
 export function markNoticeSent(rowid: number): void {
   stmt('update message_queue set notice_sent = 1 where rowid = ?').run(rowid);
 }
+/** Attach a user-facing notice to a queue row without touching its status:
+ * drainNotices delivers it with claim+retry regardless of how the task ends
+ * (pendingNotices gates on notice_sent, not on status). */
+export function setQueueNotice(rowid: number, notice: string): void {
+  stmt('update message_queue set notice_text = ? where rowid = ?').run(notice, rowid);
+}
 export function postponeNotice(rowid: number, delayMs = 300_000): void {
   stmt('update message_queue set notice_next_attempt_at = ? where rowid = ?').run(
     Date.now() + delayMs,

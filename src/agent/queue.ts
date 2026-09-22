@@ -22,6 +22,7 @@ import {
   pendingNotices,
   markNoticeSent,
   postponeNotice,
+  setQueueNotice,
 } from '../db.js';
 import { invokeAgent } from './invoke.js';
 import { sendResponse, sendDurableResponse, setTyping } from '../discord/client.js';
@@ -376,6 +377,12 @@ async function processMessage(
           }
         : undefined,
     });
+
+    if (result.attachmentNotice) {
+      // User-facing shortfall (attachments dropped/partial): goes through the
+      // queue-notice machinery — claim, retry, delivery even on success.
+      setQueueNotice(rowid, `Task #${rowid}: ${result.attachmentNotice}`);
+    }
 
     if (signal.aborted) {
       // Shutdown interrupted processing: leave the row 'processing' so the

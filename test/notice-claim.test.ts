@@ -56,3 +56,21 @@ describe('notice claim window (regression: duplicate notices under latency)', ()
     }
   });
 });
+
+describe('setQueueNotice (attachment shortfall channel notice)', () => {
+  it('attaches a notice that drainNotices delivers regardless of final status', () => {
+    const rowid = enqueue();
+    db.claimNextMessage('dc:a');
+    db.setQueueNotice(
+      rowid,
+      'Task #1: Only 1 of 2 attachments could be downloaded; the rest failed.',
+    );
+    db.markMessageDone(rowid);
+    const pending = db.pendingNotices();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.notice_text).toContain('Only 1 of 2 attachments');
+    // The done row keeps its status: the notice rides along, it does not
+    // rewrite the outcome.
+    expect(db.getQueuedMessage(rowid)?.status).toBe('done');
+  });
+});
