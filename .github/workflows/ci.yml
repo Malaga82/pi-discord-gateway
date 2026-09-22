@@ -50,7 +50,6 @@ jobs:
 
       - name: Test
         run: npm test
-        continue-on-error: ${{ matrix.os == 'windows-latest' }}
 
       - name: CLI smoke test
         run: node dist/cli/index.js help
