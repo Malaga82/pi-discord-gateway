@@ -14,6 +14,17 @@ vi.mock('../src/agent/invoke.js', () => ({
   invokeAgent: invokeAgentMock,
 }));
 
+// The queue recovery flow awaits a catalog refresh per message; without this
+// mock it spawns real `pi --list-models`/SDK probes, whose environment-
+// dependent failure (EPIPE against a dead child on windows runners) starves
+// the waitFor timeouts. Discovery is queue-lifecycle's business, not this
+// file's.
+vi.mock('../src/agent/model-catalog.js', async (original) => ({
+  ...(await original<typeof import('../src/agent/model-catalog.js')>()),
+  scheduleCatalogRefresh: () => {},
+  refreshModelCatalog: async () => [],
+}));
+
 vi.mock('../src/discord/client.js', () => ({
   sendResponse: sendResponseMock,
   sendDurableResponse: async () => true,
