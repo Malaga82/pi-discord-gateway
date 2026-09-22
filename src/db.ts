@@ -167,6 +167,10 @@ function normalizeTimestamp(timestamp: string | null): string | null {
 
 // ── Channel registration ──
 
+// Upsert by design: on conflict it refreshes identity/flags but PRESERVES
+// model_override, thinking_override and thread_mode from the existing row —
+// re-registering a channel (e.g. routeMessageToThread reusing the row) must
+// not wipe user configuration. managed_thread only ever ratchets up (max).
 export function registerChannel(ch: RegisteredChannel): void {
   stmt(
     `

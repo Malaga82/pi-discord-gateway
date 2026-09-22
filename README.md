@@ -257,6 +257,7 @@ Most users won't need to edit this file directly — `piscord setup` generates i
 | `MAX_CONCURRENCY`            | `3`                             | Max parallel pi invocations                                                                                                      |
 | `MAX_SCHEDULED_CONCURRENCY`  | `5`                             | Max scheduled tasks enqueued per tick (execution is still serialized by `MAX_CONCURRENCY`)                                       |
 | `POLL_INTERVAL_MS`           | `1000`                          | Queue poll interval (ms)                                                                                                         |
+| `MODEL_CATALOG_TTL_MS`       | `300000`                        | Model catalog cache TTL (ms); each refresh spawns `pi --list-models` plus an SDK probe                                           |
 | `SHUTDOWN_TIMEOUT_MS`        | `15000`                         | Graceful shutdown timeout (ms)                                                                                                   |
 | `AGENT_TIMEOUT_MS`           | `1800000`                       | Total pi invocation limit in ms (`0` = unlimited)                                                                                |
 | `AUTO_REGISTER_DMS`          | `false`                         | Auto-register DM channels — `false`: DMs are ignored unless explicitly enabled (they bypass the channel policy)                  |
