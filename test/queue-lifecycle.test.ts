@@ -252,30 +252,34 @@ describe('queue with real processes and durable SQLite', () => {
     // And the answer was delivered to the thread channel, not the parent.
     expect(state.send.mock.calls[0][0]).toBe('dc:t1');
   });
-  it('marks queued source messages as cancelled when a channel is stopped', { timeout: 20_000 }, async () => {
-    const { config } = await import('../src/config.js');
-    enqueue('BLOCK', 'dc:a', 'active-msg');
-    const pending = enqueue('SHOULD-NOT-RUN', 'dc:a', 'pending-msg');
-    queue.startProcessingLoop();
-    await started();
-    expect(queue.abortChannelTask('dc:a')).toEqual({ aborted: true, cleared: 1 });
-    await status(pending, 'cancelled');
-    await queue.stopProcessingLoop({ timeoutMs: 0 });
-    await vi.waitFor(() => {
-      // Fork semantics: the in-flight row is marked failed by /pi stop, the
-      // pending ones cancelled — the reactions project both terminal states.
-      expect(state.setStatusReaction).toHaveBeenCalledWith(
-        'dc:a',
-        'pending-msg',
-        config.discordReactionCancelled,
-      );
-      expect(state.setStatusReaction).toHaveBeenCalledWith(
-        'dc:a',
-        'active-msg',
-        config.discordReactionFailed,
-      );
-    });
-  });
+  it(
+    'marks queued source messages as cancelled when a channel is stopped',
+    { timeout: 20_000 },
+    async () => {
+      const { config } = await import('../src/config.js');
+      enqueue('BLOCK', 'dc:a', 'active-msg');
+      const pending = enqueue('SHOULD-NOT-RUN', 'dc:a', 'pending-msg');
+      queue.startProcessingLoop();
+      await started();
+      expect(queue.abortChannelTask('dc:a')).toEqual({ aborted: true, cleared: 1 });
+      await status(pending, 'cancelled');
+      await queue.stopProcessingLoop({ timeoutMs: 0 });
+      await vi.waitFor(() => {
+        // Fork semantics: the in-flight row is marked failed by /pi stop, the
+        // pending ones cancelled — the reactions project both terminal states.
+        expect(state.setStatusReaction).toHaveBeenCalledWith(
+          'dc:a',
+          'pending-msg',
+          config.discordReactionCancelled,
+        );
+        expect(state.setStatusReaction).toHaveBeenCalledWith(
+          'dc:a',
+          'active-msg',
+          config.discordReactionFailed,
+        );
+      });
+    },
+  );
   it('marks the source Discord message as failed when delivery is rejected', async () => {
     const { config } = await import('../src/config.js');
     state.send

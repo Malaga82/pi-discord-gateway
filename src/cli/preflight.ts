@@ -7,9 +7,7 @@ export function assertSupportedPiVersion(version: string): void {
   const major = match ? Number(match[1]) : NaN;
   const minor = match ? Number(match[2]) : NaN;
   if (!match || (major === 0 && minor < 83) || major >= 2) {
-    throw new Error(
-      `Unsupported pi version ${version}. Install pi >=0.83.0 <2.0.0.`,
-    );
+    throw new Error(`Unsupported pi version ${version}. Install pi >=0.83.0 <2.0.0.`);
   }
 }
 

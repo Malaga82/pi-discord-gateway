@@ -100,8 +100,14 @@ export function startProcessingLoop(): void {
   // (pi was never invoked), rows whose execution started are parked as
   // interrupted with a notice — never silently rerun. Rows already over the
   // attempt budget die as failed (crash-loop ceiling).
-  const { recovered, interrupted, abandoned, abandonedByChannel, interruptedSources, abandonedSources } =
-    recoverStuckMessages();
+  const {
+    recovered,
+    interrupted,
+    abandoned,
+    abandonedByChannel,
+    interruptedSources,
+    abandonedSources,
+  } = recoverStuckMessages();
   if (abandoned > 0) {
     logger.warn(
       { abandoned, maxAttempts: config.maxMessageAttempts },
