@@ -239,7 +239,7 @@ describe('conversation threads', () => {
     const { routeQueuedMessage } = await import('../src/discord/threads.js');
     const { io } = threadTransport();
     await io.create('parent', 'question', 'Created before routing finished');
-    expect(db.clearPendingMessages('dc:question')).toBe(1);
+    expect(db.clearPendingMessages('dc:question')).toHaveLength(1);
     await routeQueuedMessage(pending, new AbortController().signal, io);
     expect(db.getQueuedMessage(id)?.status).toBe('cancelled');
     expect(db.claimNextMessage('dc:question')).toBeUndefined();

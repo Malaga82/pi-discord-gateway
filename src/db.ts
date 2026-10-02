@@ -356,16 +356,24 @@ export function setMessageState(
     "update message_queue set status = ?, notice_text = coalesce(?, notice_text), processed_at = datetime('now') where rowid = ?",
   ).run(status, notice ?? null, rowid);
 }
-export function clearPendingMessages(channelJid: string): number {
+/** Identifies the Discord message a queue row was created from. */
+export type QueuedMessageSource = Pick<
+  QueuedMessage,
+  'rowid' | 'channel_jid' | 'origin_jid' | 'source_message_id'
+>;
+
+export function clearPendingMessages(channelJid: string): QueuedMessageSource[] {
   return stmt(
-    "update message_queue set status = 'cancelled', processed_at = datetime('now') where (channel_jid = ? and status in ('pending', 'routing', 'delivering')) or (status = 'routing' and 'dc:' || coalesce(source_message_id, anchor_message_id) = ?)",
-  ).run(channelJid, channelJid).changes;
+    "update message_queue set status = 'cancelled', processed_at = datetime('now') where (channel_jid = ? and status in ('pending', 'routing', 'delivering')) or (status = 'routing' and 'dc:' || coalesce(source_message_id, anchor_message_id) = ?) returning rowid, channel_jid, origin_jid, source_message_id",
+  ).all(channelJid, channelJid) as QueuedMessageSource[];
 }
 export function recoverStuckMessages(): {
   recovered: number;
   interrupted: number;
   abandoned: number;
   abandonedByChannel: Array<{ jid: string; count: number }>;
+  interruptedSources: QueuedMessageSource[];
+  abandonedSources: QueuedMessageSource[];
 } {
   return db.transaction(() => {
     // Routing has not invoked pi yet. Its persisted source/anchor makes retry safe.
@@ -379,24 +387,27 @@ export function recoverStuckMessages(): {
     const abandonedRows = stmt(
       `update message_queue set status = 'failed', processed_at = datetime('now')
      where status = 'processing' and attempts >= ?
-     returning channel_jid`,
-    ).all(config.maxMessageAttempts) as Array<{ channel_jid: string }>;
+     returning rowid, channel_jid, origin_jid, source_message_id`,
+    ).all(config.maxMessageAttempts) as Array<QueuedMessageSource>;
     // Execution started, result unknown: report, never rerun (README restart
     // table). The notice carries the task id so `piscord result` stays usable.
-    const interrupted = stmt(
+    const interruptedRows = stmt(
       `update message_queue set status = 'interrupted', processed_at = datetime('now'), notice_text =
       'Task #' || rowid || ': the gateway restarted during this task. Some operations may have completed. Check the result before submitting it again.'
-      where status = 'processing'`,
-    ).run().changes;
+      where status = 'processing'
+      returning rowid, channel_jid, origin_jid, source_message_id`,
+    ).all() as Array<QueuedMessageSource>;
     const counts = new Map<string, number>();
     for (const row of abandonedRows) {
       counts.set(row.channel_jid, (counts.get(row.channel_jid) ?? 0) + 1);
     }
     return {
       recovered,
-      interrupted,
+      interrupted: interruptedRows.length,
       abandoned: abandonedRows.length,
       abandonedByChannel: [...counts].map(([jid, count]) => ({ jid, count })),
+      interruptedSources: interruptedRows,
+      abandonedSources: abandonedRows,
     };
   })();
 }

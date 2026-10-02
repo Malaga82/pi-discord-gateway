@@ -1,6 +1,16 @@
 # Changelog
 
+## [2.1.1] - fork
+
+Fork release (Malaga82/pi-discord-gateway): upstream 2.1.0 (Discord status reactions) merged into the fork feature set — streaming, per-channel serial locks, restart recovery with attempt ceiling, notice claiming, pi 1.x compat (sync forceRefresh via blocking CLI discovery, preflight/peer range <2.0.0), sanitized subprocess env. AUTO_REGISTER_DMS defaults to false.
+
 All notable changes to this project will be documented in this file.
+
+## [2.1.0] - 2026-09-27
+
+### Added
+
+- Status reactions on the source Discord message: 👀 when queued, ✅ when done, ❌ when failed or interrupted, 🛑 when cancelled. Configurable with `DISCORD_REACTIONS_ENABLED` and `DISCORD_REACTION_*`; requires the `Add Reactions` bot permission. Contributed by @ce-dric.
 
 ## [2.0.0] - 2026-09-14
 

@@ -13,7 +13,7 @@
 
 A lightweight Discord gateway for [pi coding agent](https://github.com/badlogic/pi-mono). SQLite-backed queue, per-channel session isolation, crash recovery, abort support. One command to set up, runs as a daemon, and keeps task and delivery state across restarts.
 
-**Latest release: 2.0.0.** Requires Node.js ≥22.19.0 and pi ≥0.83.0 <1.0.0. See [upgrade and recovery](#task-recovery-and-delivery) before updating from 1.x, and [Changelog](./CHANGELOG.md) for details.
+**Latest release: 2.1.1.** Requires Node.js ≥22.19.0 and pi ≥0.83.0 <1.0.0. See [upgrade and recovery](#task-recovery-and-delivery) before updating from 1.x, and [Changelog](./CHANGELOG.md) for details.
 
 ```bash
 npm install -g piscord
@@ -30,7 +30,7 @@ That's it. The setup wizard checks prerequisites, asks for your Discord bot toke
 
 - **Discord bot token** — [create one here](https://discord.com/developers/applications)
   - Enable **Message Content Intent** under Privileged Gateway Intents
-  - Bot permissions: `Send Messages`, `Read Message History`, `View Channels`, `Attach Files`
+  - Bot permissions: `Send Messages`, `Read Message History`, `View Channels`, `Attach Files`, `Add Reactions`
 
 ## Features
 
@@ -51,6 +51,7 @@ That's it. The setup wizard checks prerequisites, asks for your Discord bot toke
 - **Scheduled tasks** — cron or one-time tasks that trigger pi sessions on schedule
 - **Archive auto-cleanup** — archived sessions are cleaned up after a configurable retention period
 - **Cross-platform** — runs on Linux, macOS, and Windows with platform-aware defaults
+- **Status reactions** — reacts to source messages with 👀 when queued, ✅ when complete, ❌ on failure, and 🛑 when cancelled
 - **Typing indicators** — shows "bot is typing" while `pi` processes
 - **Message splitting** — handles Discord's 2000-character limit automatically
 - **Daemon management** — systemd on Linux, launchd on macOS
@@ -261,6 +262,11 @@ Most users won't need to edit this file directly — `piscord setup` generates i
 | `SHUTDOWN_TIMEOUT_MS`        | `15000`                         | Graceful shutdown timeout (ms)                                                                                                   |
 | `AGENT_TIMEOUT_MS`           | `1800000`                       | Total pi invocation limit in ms (`0` = unlimited)                                                                                |
 | `AUTO_REGISTER_DMS`          | `false`                         | Auto-register DM channels — `false`: DMs are ignored unless explicitly enabled (they bypass the channel policy)                  |
+| `DISCORD_REACTIONS_ENABLED`  | `true`                          | Add status reactions to source messages                                                                                          |
+| `DISCORD_REACTION_QUEUED`    | `👀`                            | Reaction added when a message is queued                                                                                          |
+| `DISCORD_REACTION_DONE`      | `✅`                            | Reaction added when a task completes                                                                                             |
+| `DISCORD_REACTION_FAILED`    | `❌`                            | Reaction added when a task fails                                                                                                 |
+| `DISCORD_REACTION_CANCELLED` | `🛑`                            | Reaction added when a task is cancelled                                                                                          |
 | `ARCHIVE_RETENTION_DAYS`     | `30`                            | Days to keep archived sessions (0 = never clean)                                                                                 |
 | `MAX_ATTACHMENT_BYTES`       | `26214400`                      | Max size per attachment (0 = no limit)                                                                                           |
 | `MAX_TOTAL_ATTACHMENT_BYTES` | `52428800`                      | Max combined attachment size (0 = no limit)                                                                                      |
@@ -273,6 +279,8 @@ Most users won't need to edit this file directly — `piscord setup` generates i
 | `SESSIONS_DIR`               | _(platform default)_/sessions   | Session storage directory (see Data Locations)                                                                                   |
 | `DB_PATH`                    | _(platform default)_/gateway.db | SQLite database path (see Data Locations)                                                                                        |
 | `LOG_LEVEL`                  | `info`                          | Log level: debug/info/warn/error                                                                                                 |
+
+Status reactions need the `Add Reactions` permission. Set `DISCORD_REACTIONS_ENABLED=false` to turn them off; a blank `DISCORD_REACTION_*` value falls back to its default rather than disabling that reaction.
 
 After changing config, restart the service: `piscord daemon stop && piscord daemon start`
 
@@ -406,6 +414,7 @@ MIT
 
 | Version | Date       | Changes                                                                      |
 | ------- | ---------- | ---------------------------------------------------------------------------- |
+| 2.1.0   | 2026-09-27 | Status reactions on source messages (queued/done/failed/cancelled)           |
 | 2.0.0   | 2026-09-14 | Modern pi compatibility, optional threads and durable task/delivery recovery |
 | 1.7.0   | 2026-07-17 | `/pi model` syncs with pi's catalog and `enabledModels`                      |
 | 1.6.1   | 2026-06-15 | Fixed README version metadata                                                |

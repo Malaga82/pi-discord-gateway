@@ -25,7 +25,12 @@ import {
   setQueueNotice,
 } from '../db.js';
 import { invokeAgent } from './invoke.js';
-import { sendResponse, sendDurableResponse, setTyping } from '../discord/client.js';
+import {
+  sendResponse,
+  sendDurableResponse,
+  setStatusReaction,
+  setTyping,
+} from '../discord/client.js';
 import { splitMessage } from '../discord/delivery.js';
 import { routeQueuedMessage } from '../discord/threads.js';
 import type { QueuedMessage } from '../types.js';
@@ -37,6 +42,7 @@ import {
 } from '../discord/streaming.js';
 import { computeEffectiveChannelSettings } from './channel-settings.js';
 import { hasCachedModelCatalog, refreshModelCatalogAsync } from './model-catalog.js';
+import type { QueuedMessageSource } from '../db.js';
 
 /** Channels currently being processed (per-channel serial lock) */
 const activeChannels = new Set<string>();
@@ -62,6 +68,13 @@ export function hasActiveTasks(): boolean {
   return activeTaskPromises.size > 0;
 }
 
+/** Cancel queued work for a channel and mark each source message as cancelled. */
+export function cancelQueuedMessages(jid: string): number {
+  const cancelled = clearPendingMessages(jid);
+  for (const message of cancelled) void reactToSourceMessage(message, 'cancelled');
+  return cancelled.length;
+}
+
 export function abortChannelTask(jid: string): { aborted: boolean; cleared: number } {
   const controller = activeChannelControllers.get(jid);
   const aborted = Boolean(controller);
@@ -73,7 +86,7 @@ export function abortChannelTask(jid: string): { aborted: boolean; cleared: numb
     if (rowid !== undefined) markMessageFailed(rowid);
     controller.abort();
   }
-  const cleared = clearPendingMessages(jid);
+  const cleared = cancelQueuedMessages(jid);
   return { aborted, cleared };
 }
 
@@ -87,13 +100,18 @@ export function startProcessingLoop(): void {
   // (pi was never invoked), rows whose execution started are parked as
   // interrupted with a notice — never silently rerun. Rows already over the
   // attempt budget die as failed (crash-loop ceiling).
-  const { recovered, interrupted, abandoned, abandonedByChannel } = recoverStuckMessages();
+  const { recovered, interrupted, abandoned, abandonedByChannel, interruptedSources, abandonedSources } =
+    recoverStuckMessages();
   if (abandoned > 0) {
     logger.warn(
       { abandoned, maxAttempts: config.maxMessageAttempts },
       'Abandoned stuck messages over attempt budget',
     );
   }
+  // Status reactions are a projection of the terminal queue status: rows the
+  // restart found mid-flight get their source message marked accordingly.
+  for (const message of interruptedSources) void reactToSourceMessage(message, 'interrupted');
+  for (const message of abandonedSources) void reactToSourceMessage(message, 'failed');
   // Tell the authors their message died — silence is the worst outcome. The
   // bot is already connected when the loop starts; best-effort, never wedge
   // the boot on it.
@@ -196,6 +214,9 @@ function dispatch(): void {
     activeChannelRowids.set(jid, msg.rowid);
 
     const taskPromise = runClaimedTask(jid, msg, controller.signal).finally(() => {
+      // The reaction mirrors whatever terminal state this run left in the
+      // database, including states written by delivery or by /stop.
+      void reactToSourceMessage(msg, getQueuedMessage(msg.rowid)?.status);
       activeChannels.delete(jid);
       activeTaskControllers.delete(msg.rowid);
       activeChannelControllers.delete(jid);
@@ -532,4 +553,36 @@ function cancellableSleep(ms: number): { promise: Promise<void>; cancel: () => v
     promise,
     cancel: resolvePromise,
   };
+}
+
+/** Status reaction for each terminal queue state. Non-terminal states keep the queued one. */
+function statusReaction(status: QueuedMessage['status'] | undefined): string | undefined {
+  switch (status) {
+    case 'done':
+      return config.discordReactionDone;
+    case 'cancelled':
+      return config.discordReactionCancelled;
+    case 'failed':
+    case 'interrupted':
+    case 'delivery_failed':
+    case 'delivery_uncertain':
+      return config.discordReactionFailed;
+    default:
+      return undefined;
+  }
+}
+
+/** React on the Discord message a queue row was created from. Best-effort:
+ * failures are logged inside setStatusReaction, never wedge the queue. */
+async function reactToSourceMessage(
+  message: QueuedMessageSource,
+  status: QueuedMessage['status'] | undefined,
+): Promise<void> {
+  const emoji = statusReaction(status);
+  if (!emoji || !message.source_message_id) return;
+  await setStatusReaction(
+    message.origin_jid || message.channel_jid,
+    message.source_message_id,
+    emoji,
+  );
 }
