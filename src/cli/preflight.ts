@@ -4,9 +4,11 @@ import { fileURLToPath } from 'node:url';
 
 export function assertSupportedPiVersion(version: string): void {
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
-  if (!match || Number(match[1]) !== 0 || Number(match[2]) < 83 || Number(match[2]) >= 88) {
+  const major = match ? Number(match[1]) : NaN;
+  const minor = match ? Number(match[2]) : NaN;
+  if (!match || (major === 0 && minor < 83) || major >= 2) {
     throw new Error(
-      `Unsupported pi version ${version}. Install pi >=0.83.0 <0.88.0 (recommended: 0.87.0).`,
+      `Unsupported pi version ${version}. Install pi >=0.83.0 <2.0.0.`,
     );
   }
 }
@@ -18,7 +20,7 @@ export function checkPiDependencies(): void {
     try {
       directory = dirname(fileURLToPath(import.meta.resolve(name)));
     } catch {
-      throw new Error(`Required peer dependency ${name} is missing. Install pi >=0.83.0 <0.88.0.`);
+      throw new Error(`Required peer dependency ${name} is missing. Install pi >=0.83.0 <2.0.0.`);
     }
     let version: string | undefined;
     while (true) {

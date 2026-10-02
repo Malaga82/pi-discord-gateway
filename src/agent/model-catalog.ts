@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
@@ -108,6 +109,13 @@ export class ModelCatalog {
     this.refreshes.set(cwd, work);
     return work;
   }
+  /** Publish externally discovered models (sync forceRefresh path). */
+  store(cwd: string, models: AvailableModelInfo[]): void {
+    const state = this.state(cwd);
+    state.models = models;
+    state.loadedAt = this.now();
+    state.error = undefined;
+  }
   private async load(cwd: string, state: ModelCache): Promise<AvailableModelInfo[]> {
     if (this.active >= 2) await new Promise<void>((resolve) => this.waiting.push(resolve));
     else this.active++;
@@ -194,6 +202,19 @@ async function discoverCli(
     ? parsePiModelList(result.stdout)
     : undefined;
 }
+/** Blocking CLI discovery for the explicit forceRefresh path. */
+function discoverCliSync(cwd: string): AvailableModelInfo[] | undefined {
+  const cliArgs = ['--list-models', ...config.piExtraFlags.split(/\s+/).filter(Boolean)];
+  const result = spawnSync(config.piBin, cliArgs, {
+    cwd,
+    timeout: LIST_MODELS_TIMEOUT_MS,
+    encoding: 'utf8',
+    env: sanitizedChildEnv(),
+  });
+  return result.status === 0 && !result.error && typeof result.stdout === 'string'
+    ? parsePiModelList(result.stdout)
+    : undefined;
+}
 async function discoverSdk(
   cwd: string,
   signal: AbortSignal,
@@ -243,7 +264,17 @@ export interface ModelListOptions {
   cwd?: string;
 }
 export function listAvailableModels(options?: ModelListOptions): AvailableModelInfo[] {
-  return catalog.read(options?.cwd ?? config.piCwd);
+  const cwd = resolve(options?.cwd ?? config.piCwd);
+  // Explicit forceRefresh is the only sync discovery path: callers opting in
+  // accept a blocking `pi --list-models`; cold reads stay non-blocking.
+  if (options?.forceRefresh) {
+    const models = discoverCliSync(cwd);
+    if (models) {
+      catalog.store(cwd, models);
+      return models;
+    }
+  }
+  return catalog.read(cwd);
 }
 export function hasCachedModelCatalog(cwd: string): boolean {
   return catalog.has(cwd);
