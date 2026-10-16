@@ -165,13 +165,15 @@ export const config = {
   archiveRetentionDays: envInt('ARCHIVE_RETENTION_DAYS', 30, { min: 0 }),
 
   /** Auto-rotate a channel's session to the archive once it has been idle at
-   * least this many hours AND its context exceeds autoRotateMinContextTokens.
+   * least this many hours AND its context exceeds the rotation threshold:
+   * 25% of the model's context window (via get_session_stats), falling back
+   * to autoRotateMinContextTokens when the window is unavailable.
    * 0 disables. Rotation is a plain rename (no LLM call): the next message
    * starts on a cheap fresh context instead of paying a full cache-miss on a
    * large stale one; the archived JSONL stays on disk for history search. */
   autoRotateIdleHours: envInt('AUTO_ROTATE_IDLE_HOURS', 0, { min: 0 }),
 
-  /** Minimum estimated context tokens before an idle session is worth rotating */
+  /** Fallback minimum context tokens when the model's window is unknown */
   autoRotateMinContextTokens: envInt('AUTO_ROTATE_MIN_CONTEXT_TOKENS', 100_000, { min: 1 }),
 
   /** Hours to retain downloaded attachment media for path-based agent access */

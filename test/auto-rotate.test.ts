@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   getAllChannels: vi.fn<() => any[]>(() => []),
   channelsWithPending: vi.fn<() => string[]>(() => []),
   isChannelProcessing: vi.fn<() => boolean>(() => false),
+  getChannelSessionStatus: vi.fn(async () => ({ statsSource: 'none' as const })),
   readTailLines: vi.fn<() => string[]>(() => []),
   fetchChannel: vi.fn(async () => undefined),
   resolveLatestChannelSessionFile: vi.fn<() => string | undefined>(() => undefined),
@@ -19,14 +20,17 @@ vi.mock('../src/db.js', () => ({
   channelsWithPending: mocks.channelsWithPending,
 }));
 vi.mock('../src/agent/queue.js', () => ({ isChannelProcessing: mocks.isChannelProcessing }));
-vi.mock('../src/agent/invoke.js', () => ({ readTailLines: mocks.readTailLines }));
+vi.mock('../src/agent/invoke.js', () => ({
+  getChannelSessionStatus: mocks.getChannelSessionStatus,
+  readTailLines: mocks.readTailLines,
+}));
 vi.mock('../src/discord/client.js', () => ({ fetchChannel: mocks.fetchChannel }));
 vi.mock('../src/session/path.js', () => ({
   resolveLatestChannelSessionFile: mocks.resolveLatestChannelSessionFile,
   rotateChannelSessionDir: mocks.rotateChannelSessionDir,
 }));
 
-// Real config singleton: the two auto-rotate knobs are plain fields mutated
+// Real config singleton: the auto-rotate knobs are plain fields mutated
 // per-test before runAutoRotate() reads them.
 import { config } from '../src/config.js';
 import { estimateContextTokens, runAutoRotate } from '../src/session/auto-rotate.js';
@@ -53,11 +57,29 @@ function makeSessionFile(ageMs: number): string {
 
 function registerChannel(overrides: Record<string, unknown> = {}): void {
   mocks.getAllChannels.mockReturnValue([
-    { jid: 'dc:42', folder: 'ch_42', name: 'test', deletedAt: undefined, ...overrides },
+    {
+      jid: 'dc:42',
+      folder: 'ch_42',
+      name: 'test',
+      deletedAt: undefined,
+      cwdOverride: '',
+      ...overrides,
+    },
   ]);
 }
 
+function mockStats(contextUsage: { tokens: number | null; contextWindow: number | null }): void {
+  mocks.getChannelSessionStatus.mockResolvedValue({
+    statsSource: 'rpc',
+    contextUsage,
+  } as any);
+}
+
 describe('estimateContextTokens', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('sums input + cacheRead + cacheWrite of the newest assistant usage', () => {
     mocks.readTailLines.mockReturnValue([
       usageLine(500, 40_000, 1_000),
@@ -91,6 +113,8 @@ describe('runAutoRotate', () => {
     vi.clearAllMocks();
     config.autoRotateIdleHours = 12;
     config.autoRotateMinContextTokens = 100_000;
+    mocks.channelsWithPending.mockReturnValue([]);
+    mocks.isChannelProcessing.mockReturnValue(false);
     mocks.fetchChannel.mockResolvedValue({ send: mocks.send } as any);
   });
 
@@ -98,28 +122,68 @@ describe('runAutoRotate', () => {
     config.autoRotateIdleHours = 12;
   });
 
-  it('rotates an idle, large-context session and posts a notice', async () => {
+  function armIdleChannel(): void {
     registerChannel();
-    const sessionFile = makeSessionFile(13 * HOUR_MS);
-    mocks.resolveLatestChannelSessionFile.mockReturnValue(sessionFile);
-    mocks.readTailLines.mockReturnValue([usageLine(500, 337_000)]);
+    mocks.resolveLatestChannelSessionFile.mockReturnValue(makeSessionFile(13 * HOUR_MS));
     mocks.rotateChannelSessionDir.mockReturnValue('/sessions/ch_42__archived_X');
+  }
+
+  it('rotates at 25% of the model context window reported by session stats', async () => {
+    armIdleChannel();
+    // 491,520 * 0.25 = 122,880 threshold; 122,900 context qualifies.
+    mockStats({ tokens: 122_900, contextWindow: 491_520 });
 
     await runAutoRotate();
 
+    expect(mocks.getChannelSessionStatus).toHaveBeenCalledWith('ch_42', expect.any(String));
     expect(mocks.rotateChannelSessionDir).toHaveBeenCalledWith('ch_42');
     expect(mocks.send).toHaveBeenCalledTimes(1);
     const content = mocks.send.mock.calls[0][0].content as string;
     expect(content).toMatch(/auto-archived/);
-    expect(content).toMatch(/338k tokens/);
+    expect(content).toMatch(/123k tokens/);
     expect(content).toContain('ch_42__archived_X');
   });
 
-  it('skips channels that are processing or have pending messages', async () => {
-    registerChannel();
-    const sessionFile = makeSessionFile(13 * HOUR_MS);
-    mocks.resolveLatestChannelSessionFile.mockReturnValue(sessionFile);
+  it('skips when the context is below 25% of the window', async () => {
+    armIdleChannel();
+    mockStats({ tokens: 100_000, contextWindow: 491_520 });
+
+    await runAutoRotate();
+
+    expect(mocks.rotateChannelSessionDir).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the static token floor when the window is unknown', async () => {
+    armIdleChannel();
+    mockStats({ tokens: 150_000, contextWindow: null });
+    await runAutoRotate();
+    expect(mocks.rotateChannelSessionDir).toHaveBeenCalledWith('ch_42');
+
+    mocks.rotateChannelSessionDir.mockClear();
+    mockStats({ tokens: 99_999, contextWindow: null });
+    await runAutoRotate();
+    expect(mocks.rotateChannelSessionDir).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the JSONL estimate when session stats throw', async () => {
+    armIdleChannel();
+    mocks.getChannelSessionStatus.mockRejectedValue(new Error('rpc down'));
     mocks.readTailLines.mockReturnValue([usageLine(500, 337_000)]);
+
+    await runAutoRotate();
+
+    expect(mocks.rotateChannelSessionDir).toHaveBeenCalledWith('ch_42');
+
+    mocks.rotateChannelSessionDir.mockClear();
+    mocks.readTailLines.mockReturnValue([usageLine(500, 50_000)]);
+    await runAutoRotate();
+    expect(mocks.rotateChannelSessionDir).not.toHaveBeenCalled();
+  });
+
+  it('skips channels that are processing or have pending messages', async () => {
+    armIdleChannel();
+    mockStats({ tokens: 400_000, contextWindow: 491_520 });
 
     mocks.isChannelProcessing.mockReturnValue(true);
     await runAutoRotate();
@@ -131,24 +195,14 @@ describe('runAutoRotate', () => {
     expect(mocks.rotateChannelSessionDir).not.toHaveBeenCalled();
   });
 
-  it('skips sessions below the context threshold', async () => {
-    registerChannel();
-    mocks.resolveLatestChannelSessionFile.mockReturnValue(makeSessionFile(13 * HOUR_MS));
-    mocks.readTailLines.mockReturnValue([usageLine(500, 50_000)]);
-
-    await runAutoRotate();
-
-    expect(mocks.rotateChannelSessionDir).not.toHaveBeenCalled();
-    expect(mocks.send).not.toHaveBeenCalled();
-  });
-
   it('skips recently active sessions', async () => {
     registerChannel();
     mocks.resolveLatestChannelSessionFile.mockReturnValue(makeSessionFile(1 * HOUR_MS));
-    mocks.readTailLines.mockReturnValue([usageLine(500, 337_000)]);
+    mockStats({ tokens: 400_000, contextWindow: 491_520 });
 
     await runAutoRotate();
 
+    expect(mocks.getChannelSessionStatus).not.toHaveBeenCalled();
     expect(mocks.rotateChannelSessionDir).not.toHaveBeenCalled();
   });
 
@@ -160,16 +214,24 @@ describe('runAutoRotate', () => {
 
     registerChannel({ deletedAt: '2026-10-16T00:00:00Z' });
     mocks.resolveLatestChannelSessionFile.mockReturnValue(makeSessionFile(13 * HOUR_MS));
-    mocks.readTailLines.mockReturnValue([usageLine(500, 337_000)]);
+    mockStats({ tokens: 400_000, contextWindow: 491_520 });
     await runAutoRotate();
     expect(mocks.rotateChannelSessionDir).not.toHaveBeenCalled();
   });
 
+  it('uses the channel cwd override for session stats', async () => {
+    registerChannel({ cwdOverride: '/srv/project' });
+    mocks.resolveLatestChannelSessionFile.mockReturnValue(makeSessionFile(13 * HOUR_MS));
+    mockStats({ tokens: 400_000, contextWindow: 491_520 });
+
+    await runAutoRotate();
+
+    expect(mocks.getChannelSessionStatus).toHaveBeenCalledWith('ch_42', '/srv/project');
+  });
+
   it('does nothing when disabled', async () => {
     config.autoRotateIdleHours = 0;
-    registerChannel();
-    mocks.resolveLatestChannelSessionFile.mockReturnValue(makeSessionFile(13 * HOUR_MS));
-    mocks.readTailLines.mockReturnValue([usageLine(500, 337_000)]);
+    armIdleChannel();
 
     await runAutoRotate();
 
@@ -178,15 +240,15 @@ describe('runAutoRotate', () => {
 
   it('keeps rotating other channels when one check fails', async () => {
     mocks.getAllChannels.mockReturnValue([
-      { jid: 'dc:1', folder: 'ch_1', deletedAt: undefined },
-      { jid: 'dc:2', folder: 'ch_2', deletedAt: undefined },
+      { jid: 'dc:1', folder: 'ch_1', deletedAt: undefined, cwdOverride: '' },
+      { jid: 'dc:2', folder: 'ch_2', deletedAt: undefined, cwdOverride: '' },
     ]);
     mocks.resolveLatestChannelSessionFile.mockImplementation((folder: string) => {
       if (folder === 'ch_1') throw new Error('boom');
       return makeSessionFile(13 * HOUR_MS);
     });
-    mocks.readTailLines.mockReturnValue([usageLine(500, 337_000)]);
-    mocks.rotateChannelSessionDir.mockReturnValue('/sessions/ch_2__archived_X');
+    mockStats({ tokens: 400_000, contextWindow: 491_520 });
+    mocks.rotateChannelSessionDir.mockReturnValue('/sessions/archived_X');
 
     await runAutoRotate();
 

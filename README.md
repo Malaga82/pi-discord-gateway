@@ -244,43 +244,43 @@ Config file location depends on your OS (see Data Locations). On Linux: `~/.conf
 
 Most users won't need to edit this file directly — `piscord setup` generates it for you. If you do want to tweak advanced settings, you can edit the file manually, or ask your pi to configure it for you. Run `piscord status` to see the config path on your system.
 
-| Variable                     | Default                         | Description                                                                                                                      |
-| ---------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `DISCORD_BOT_TOKEN`          | _(required)_                    | Discord bot token                                                                                                                |
-| `PI_BIN`                     | `pi`                            | Path to pi binary                                                                                                                |
-| `PI_MODEL`                   | _(none)_                        | Default model override                                                                                                           |
-| `PI_THINKING`                | _(none)_                        | Default thinking level                                                                                                           |
-| `PI_CWD`                     | `$HOME`                         | Default working directory for pi; can be overridden per registered channel                                                       |
-| `PI_EXTRA_FLAGS`             | _(none)_                        | Extra flags passed to pi                                                                                                         |
-| `TRIGGER_NAME`               | `pi`                            | Bot trigger name for @mentions                                                                                                   |
-| `CHANNEL_POLICY`             | `allowlist`                     | Channel access: `open`, `open-trigger`, or `allowlist`                                                                           |
-| `EXCLUDED_CHANNELS`          | _(none)_                        | Comma-separated channel IDs to exclude from auto-registration                                                                    |
-| `MAX_CONCURRENCY`            | `3`                             | Max parallel pi invocations                                                                                                      |
-| `MAX_SCHEDULED_CONCURRENCY`  | `5`                             | Max scheduled tasks enqueued per tick (execution is still serialized by `MAX_CONCURRENCY`)                                       |
-| `POLL_INTERVAL_MS`           | `1000`                          | Queue poll interval (ms)                                                                                                         |
-| `MODEL_CATALOG_TTL_MS`       | `300000`                        | Model catalog cache TTL (ms); each refresh spawns `pi --list-models` plus an SDK probe                                           |
-| `SHUTDOWN_TIMEOUT_MS`        | `15000`                         | Graceful shutdown timeout (ms)                                                                                                   |
-| `AGENT_TIMEOUT_MS`           | `1800000`                       | Total pi invocation limit in ms (`0` = unlimited)                                                                                |
-| `AUTO_REGISTER_DMS`          | `false`                         | Auto-register DM channels — `false`: DMs are ignored unless explicitly enabled (they bypass the channel policy)                  |
-| `DISCORD_REACTIONS_ENABLED`  | `true`                          | Add status reactions to source messages                                                                                          |
-| `DISCORD_REACTION_QUEUED`    | `👀`                            | Reaction added when a message is queued                                                                                          |
-| `DISCORD_REACTION_DONE`      | `✅`                            | Reaction added when a task completes                                                                                             |
-| `DISCORD_REACTION_FAILED`    | `❌`                            | Reaction added when a task fails                                                                                                 |
-| `DISCORD_REACTION_CANCELLED` | `🛑`                            | Reaction added when a task is cancelled                                                                                          |
-| `ARCHIVE_RETENTION_DAYS`     | `30`                            | Days to keep archived sessions (0 = never clean)                                                                                 |
-| `AUTO_ROTATE_IDLE_HOURS`     | `0` (disabled)                  | Auto-archive a channel session idle this many hours when its context exceeds `AUTO_ROTATE_MIN_CONTEXT_TOKENS` (0 = disabled)      |
-| `AUTO_ROTATE_MIN_CONTEXT_TOKENS` | `100000`                    | Minimum estimated context tokens before an idle session is worth rotating                                                        |
-| `MAX_ATTACHMENT_BYTES`       | `26214400`                      | Max size per attachment (0 = no limit)                                                                                           |
-| `MAX_TOTAL_ATTACHMENT_BYTES` | `52428800`                      | Max combined attachment size (0 = no limit)                                                                                      |
-| `MEDIA_RETENTION_HOURS`      | `168`                           | Hours to keep downloaded attachment files for path-based agent access                                                            |
-| `STREAMING`                  | `tools`                         | Live activity message: `off`, `tools` (activity log), `full` (log + streamed text)                                               |
-| `STREAMING_UPDATE_MS`        | `2000`                          | Min interval between live message edits (ms)                                                                                     |
-| `ALLOW_BOT_PEERS`            | _(none)_                        | Comma-separated Discord user IDs of peer bots allowed to trigger the agent (must also @mention the bot). Empty = ignore all bots |
-| `BOT_LOOP_MAX`               | `10`                            | Bot-peer loop guard: max peer messages per (peer, channel) within the window before dropping (0 = no guard)                      |
-| `BOT_LOOP_WINDOW_MS`         | `300000`                        | Bot-peer loop guard sliding window (ms)                                                                                          |
-| `SESSIONS_DIR`               | _(platform default)_/sessions   | Session storage directory (see Data Locations)                                                                                   |
-| `DB_PATH`                    | _(platform default)_/gateway.db | SQLite database path (see Data Locations)                                                                                        |
-| `LOG_LEVEL`                  | `info`                          | Log level: debug/info/warn/error                                                                                                 |
+| Variable                         | Default                         | Description                                                                                                                      |
+| -------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `DISCORD_BOT_TOKEN`              | _(required)_                    | Discord bot token                                                                                                                |
+| `PI_BIN`                         | `pi`                            | Path to pi binary                                                                                                                |
+| `PI_MODEL`                       | _(none)_                        | Default model override                                                                                                           |
+| `PI_THINKING`                    | _(none)_                        | Default thinking level                                                                                                           |
+| `PI_CWD`                         | `$HOME`                         | Default working directory for pi; can be overridden per registered channel                                                       |
+| `PI_EXTRA_FLAGS`                 | _(none)_                        | Extra flags passed to pi                                                                                                         |
+| `TRIGGER_NAME`                   | `pi`                            | Bot trigger name for @mentions                                                                                                   |
+| `CHANNEL_POLICY`                 | `allowlist`                     | Channel access: `open`, `open-trigger`, or `allowlist`                                                                           |
+| `EXCLUDED_CHANNELS`              | _(none)_                        | Comma-separated channel IDs to exclude from auto-registration                                                                    |
+| `MAX_CONCURRENCY`                | `3`                             | Max parallel pi invocations                                                                                                      |
+| `MAX_SCHEDULED_CONCURRENCY`      | `5`                             | Max scheduled tasks enqueued per tick (execution is still serialized by `MAX_CONCURRENCY`)                                       |
+| `POLL_INTERVAL_MS`               | `1000`                          | Queue poll interval (ms)                                                                                                         |
+| `MODEL_CATALOG_TTL_MS`           | `300000`                        | Model catalog cache TTL (ms); each refresh spawns `pi --list-models` plus an SDK probe                                           |
+| `SHUTDOWN_TIMEOUT_MS`            | `15000`                         | Graceful shutdown timeout (ms)                                                                                                   |
+| `AGENT_TIMEOUT_MS`               | `1800000`                       | Total pi invocation limit in ms (`0` = unlimited)                                                                                |
+| `AUTO_REGISTER_DMS`              | `false`                         | Auto-register DM channels — `false`: DMs are ignored unless explicitly enabled (they bypass the channel policy)                  |
+| `DISCORD_REACTIONS_ENABLED`      | `true`                          | Add status reactions to source messages                                                                                          |
+| `DISCORD_REACTION_QUEUED`        | `👀`                            | Reaction added when a message is queued                                                                                          |
+| `DISCORD_REACTION_DONE`          | `✅`                            | Reaction added when a task completes                                                                                             |
+| `DISCORD_REACTION_FAILED`        | `❌`                            | Reaction added when a task fails                                                                                                 |
+| `DISCORD_REACTION_CANCELLED`     | `🛑`                            | Reaction added when a task is cancelled                                                                                          |
+| `ARCHIVE_RETENTION_DAYS`         | `30`                            | Days to keep archived sessions (0 = never clean)                                                                                 |
+| `AUTO_ROTATE_IDLE_HOURS`         | `0` (disabled)                  | Auto-archive a channel session idle this many hours when its context exceeds 25% of the model's window (0 = disabled)            |
+| `AUTO_ROTATE_MIN_CONTEXT_TOKENS` | `100000`                        | Fallback minimum context tokens when the model's window is unavailable                                                           |
+| `MAX_ATTACHMENT_BYTES`           | `26214400`                      | Max size per attachment (0 = no limit)                                                                                           |
+| `MAX_TOTAL_ATTACHMENT_BYTES`     | `52428800`                      | Max combined attachment size (0 = no limit)                                                                                      |
+| `MEDIA_RETENTION_HOURS`          | `168`                           | Hours to keep downloaded attachment files for path-based agent access                                                            |
+| `STREAMING`                      | `tools`                         | Live activity message: `off`, `tools` (activity log), `full` (log + streamed text)                                               |
+| `STREAMING_UPDATE_MS`            | `2000`                          | Min interval between live message edits (ms)                                                                                     |
+| `ALLOW_BOT_PEERS`                | _(none)_                        | Comma-separated Discord user IDs of peer bots allowed to trigger the agent (must also @mention the bot). Empty = ignore all bots |
+| `BOT_LOOP_MAX`                   | `10`                            | Bot-peer loop guard: max peer messages per (peer, channel) within the window before dropping (0 = no guard)                      |
+| `BOT_LOOP_WINDOW_MS`             | `300000`                        | Bot-peer loop guard sliding window (ms)                                                                                          |
+| `SESSIONS_DIR`                   | _(platform default)_/sessions   | Session storage directory (see Data Locations)                                                                                   |
+| `DB_PATH`                        | _(platform default)_/gateway.db | SQLite database path (see Data Locations)                                                                                        |
+| `LOG_LEVEL`                      | `info`                          | Log level: debug/info/warn/error                                                                                                 |
 
 Status reactions need the `Add Reactions` permission. Set `DISCORD_REACTIONS_ENABLED=false` to turn them off; a blank `DISCORD_REACTION_*` value falls back to its default rather than disabling that reaction.
 

@@ -4,7 +4,7 @@
 
 ### Added
 
-- Optional auto-rotation of idle channel sessions (`AUTO_ROTATE_IDLE_HOURS`, `AUTO_ROTATE_MIN_CONTEXT_TOKENS`): once a channel has been idle past the threshold and its estimated context exceeds the token floor, the session is archived (same mechanism as `/pi new`) and a notice is posted, so the next message starts on a cheap fresh context instead of a full cache-miss on a large stale one. Disabled by default.
+- Optional auto-rotation of idle channel sessions (`AUTO_ROTATE_IDLE_HOURS`, `AUTO_ROTATE_MIN_CONTEXT_TOKENS`): once a channel has been idle past the threshold and its context exceeds 25% of the model's context window (read per session from pi's `get_session_stats`; token floor as fallback), the session is archived (same mechanism as `/pi new`) and a notice is posted, so the next message starts on a cheap fresh context instead of a full cache-miss on a large stale one. Disabled by default.
 
 ## [2.1.1] - fork
 

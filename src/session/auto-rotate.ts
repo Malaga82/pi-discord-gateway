@@ -3,7 +3,7 @@ import { basename } from 'node:path';
 import { config } from '../config.js';
 import { channelsWithPending, getAllChannels } from '../db.js';
 import { isChannelProcessing } from '../agent/queue.js';
-import { readTailLines } from '../agent/invoke.js';
+import { getChannelSessionStatus, readTailLines } from '../agent/invoke.js';
 import { fetchChannel } from '../discord/client.js';
 import { resolveLatestChannelSessionFile, rotateChannelSessionDir } from './path.js';
 import { logger } from '../logger.js';
@@ -11,16 +11,21 @@ import { logger } from '../logger.js';
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const CHECK_INTERVAL_MS = HOUR_MS;
-/** Tail window for the context estimate: a usage line is short, but a large
- * kept assistant message may push the newest usage entry further back. */
+/** Tail window for the fallback context estimate: a usage line is short, but
+ * a large kept assistant message may push the newest usage entry further back. */
 const TAIL_BYTES = 256 * 1024;
+/** Rotate when the session context exceeds this fraction of the model's
+ * context window. The window comes per session from pi's get_session_stats
+ * RPC, so it always reflects the model actually in use.
+ * ponytail: fixed fraction, no per-channel override — add one if a channel
+ * ever needs a different budget. */
+const CONTEXT_WINDOW_FRACTION = 0.25;
 
 /** Estimate the context tokens of the newest pi request from the session
  * tail: the prompt size is input + cacheRead + cacheWrite of the newest
  * assistant usage entry.
- * ponytail: approximates pi's projected context (no system prompt, no
- * compaction projection); switch to get_session_stats RPC if the threshold
- * ever misbehaves. */
+ * ponytail: approximates pi's projected context; only used as fallback when
+ * get_session_stats gives no contextUsage (e.g. RPC unavailable). */
 export function estimateContextTokens(sessionFile: string): number {
   let lines: string[];
   try {
@@ -54,6 +59,42 @@ export function estimateContextTokens(sessionFile: string): number {
   }
 
   return 0;
+}
+
+interface ContextBudget {
+  contextTokens: number;
+  thresholdTokens: number;
+}
+
+/** Resolve the session's current context and its rotation threshold. The
+ * threshold is 25% of the model's context window when pi reports one, else
+ * the static AUTO_ROTATE_MIN_CONTEXT_TOKENS floor. */
+async function resolveContextBudget(
+  folder: string,
+  cwd: string,
+  sessionFile: string,
+): Promise<ContextBudget> {
+  try {
+    const status = await getChannelSessionStatus(folder, cwd);
+    const tokens = status.contextUsage?.tokens;
+    const window = status.contextUsage?.contextWindow;
+    if (tokens != null && window != null && window > 0) {
+      return {
+        contextTokens: tokens,
+        thresholdTokens: Math.ceil(window * CONTEXT_WINDOW_FRACTION),
+      };
+    }
+    if (tokens != null) {
+      return { contextTokens: tokens, thresholdTokens: config.autoRotateMinContextTokens };
+    }
+  } catch (err: any) {
+    logger.warn({ err: err.message, folder }, 'Session stats unavailable for auto-rotate');
+  }
+
+  return {
+    contextTokens: estimateContextTokens(sessionFile),
+    thresholdTokens: config.autoRotateMinContextTokens,
+  };
 }
 
 async function postNotice(
@@ -107,14 +148,24 @@ async function rotateEligibleChannels(now: number): Promise<void> {
       const idleMs = now - statSync(sessionFile).mtimeMs;
       if (idleMs < idleThresholdMs) continue;
 
-      const contextTokens = estimateContextTokens(sessionFile);
-      if (contextTokens < config.autoRotateMinContextTokens) continue;
+      const { contextTokens, thresholdTokens } = await resolveContextBudget(
+        channel.folder,
+        channel.cwdOverride || config.piCwd,
+        sessionFile,
+      );
+      if (contextTokens < thresholdTokens) continue;
 
       const archivedPath = rotateChannelSessionDir(channel.folder);
       if (!archivedPath) continue;
 
       logger.info(
-        { jid: channel.jid, folder: channel.folder, archivedPath, contextTokens },
+        {
+          jid: channel.jid,
+          folder: channel.folder,
+          archivedPath,
+          contextTokens,
+          thresholdTokens,
+        },
         'Auto-rotated idle channel session',
       );
       await postNotice(channel.jid, archivedPath, contextTokens, idleMs);
