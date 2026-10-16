@@ -21,6 +21,7 @@ vi.mock('../src/db.js', () => ({
   initDb: vi.fn(),
   closeDb: state.closeDb,
   getAllChannels: () => [],
+  channelsWithPending: () => [],
 }));
 vi.mock('../src/instance-lock.js', () => ({ acquireInstanceLock: async () => state.release }));
 vi.mock('../src/discord/client.js', () => ({

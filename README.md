@@ -268,6 +268,8 @@ Most users won't need to edit this file directly — `piscord setup` generates i
 | `DISCORD_REACTION_FAILED`    | `❌`                            | Reaction added when a task fails                                                                                                 |
 | `DISCORD_REACTION_CANCELLED` | `🛑`                            | Reaction added when a task is cancelled                                                                                          |
 | `ARCHIVE_RETENTION_DAYS`     | `30`                            | Days to keep archived sessions (0 = never clean)                                                                                 |
+| `AUTO_ROTATE_IDLE_HOURS`     | `0` (disabled)                  | Auto-archive a channel session idle this many hours when its context exceeds `AUTO_ROTATE_MIN_CONTEXT_TOKENS` (0 = disabled)      |
+| `AUTO_ROTATE_MIN_CONTEXT_TOKENS` | `100000`                    | Minimum estimated context tokens before an idle session is worth rotating                                                        |
 | `MAX_ATTACHMENT_BYTES`       | `26214400`                      | Max size per attachment (0 = no limit)                                                                                           |
 | `MAX_TOTAL_ATTACHMENT_BYTES` | `52428800`                      | Max combined attachment size (0 = no limit)                                                                                      |
 | `MEDIA_RETENTION_HOURS`      | `168`                           | Hours to keep downloaded attachment files for path-based agent access                                                            |

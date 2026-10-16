@@ -675,7 +675,7 @@ async function getSessionStatsViaRpc(
 }
 
 /** Read the last maxBytes of a file as lines (first line may be partial). */
-function readTailLines(sessionFile: string, maxBytes: number): string[] {
+export function readTailLines(sessionFile: string, maxBytes: number): string[] {
   let fd: number | undefined;
   try {
     fd = openSync(sessionFile, 'r');

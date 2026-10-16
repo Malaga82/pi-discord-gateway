@@ -4,6 +4,7 @@ import { initDb, closeDb, getAllChannels } from './db.js';
 import { startDiscord, stopDiscord, getBotTag } from './discord/client.js';
 import { startArchiveCleanup } from './session/archive-cleanup.js';
 import { startMediaCleanup } from './session/media.js';
+import { startAutoRotate } from './session/auto-rotate.js';
 import { refreshModelCatalog, stopModelCatalog } from './agent/model-catalog.js';
 import { runPool } from './util/run-pool.js';
 import { startProcessingLoop, stopProcessingLoop } from './agent/queue.js';
@@ -42,6 +43,7 @@ export async function startGateway(): Promise<void> {
 
   let stopArchiveCleanup = () => {};
   let stopMediaCleanup = () => {};
+  let stopAutoRotate = () => {};
   let stopScheduler = () => {};
   let stopThreads: () => Promise<void> = async () => {};
   let processingStarted = false;
@@ -80,6 +82,7 @@ export async function startGateway(): Promise<void> {
         : Promise.resolve();
       stopArchiveCleanup();
       stopMediaCleanup();
+      stopAutoRotate();
       await Promise.all([stoppedProcessing, stopThreads()]);
 
       await stopModelCatalog();
@@ -108,6 +111,7 @@ export async function startGateway(): Promise<void> {
     stopThreads = startThreadMaintenance();
     stopArchiveCleanup = startArchiveCleanup();
     stopMediaCleanup = startMediaCleanup();
+    stopAutoRotate = startAutoRotate();
 
     logger.info(
       {

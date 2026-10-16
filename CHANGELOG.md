@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased] - fork
+
+### Added
+
+- Optional auto-rotation of idle channel sessions (`AUTO_ROTATE_IDLE_HOURS`, `AUTO_ROTATE_MIN_CONTEXT_TOKENS`): once a channel has been idle past the threshold and its estimated context exceeds the token floor, the session is archived (same mechanism as `/pi new`) and a notice is posted, so the next message starts on a cheap fresh context instead of a full cache-miss on a large stale one. Disabled by default.
+
 ## [2.1.1] - fork
 
 Fork release (Malaga82/pi-discord-gateway): upstream 2.1.0 (Discord status reactions) merged into the fork feature set — streaming, per-channel serial locks, restart recovery with attempt ceiling, notice claiming, pi 1.x compat (sync forceRefresh via blocking CLI discovery, preflight/peer range <2.0.0), sanitized subprocess env. AUTO_REGISTER_DMS defaults to false.
