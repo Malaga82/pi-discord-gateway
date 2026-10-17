@@ -10,9 +10,9 @@ const mocks = vi.hoisted(() => ({
   getChannelSessionStatus: vi.fn(async () => ({ statsSource: 'none' as const })),
   readTailLines: vi.fn<() => string[]>(() => []),
   fetchChannel: vi.fn(async () => undefined),
-  resolveLatestChannelSessionFile: vi.fn<() => string | undefined>(() => undefined),
-  rotateChannelSessionDir: vi.fn<() => string | undefined>(() => undefined),
-  send: vi.fn(async () => undefined),
+  resolveLatestChannelSessionFile: vi.fn<(folder: string) => string | undefined>(() => undefined),
+  rotateChannelSessionDir: vi.fn<(folder: string) => string | undefined>(() => undefined),
+  send: vi.fn<(payload: { content: string }) => Promise<undefined>>(async () => undefined),
 }));
 
 vi.mock('../src/db.js', () => ({
@@ -35,6 +35,12 @@ vi.mock('../src/session/path.js', () => ({
 import { config } from '../src/config.js';
 import { estimateContextTokens, runAutoRotate } from '../src/session/auto-rotate.js';
 
+// config is a frozen `as const` singleton; tests need mutable knobs.
+const knobs = config as unknown as {
+  autoRotateIdleHours: number;
+  autoRotateMinContextTokens: number;
+};
+
 const HOUR_MS = 60 * 60 * 1000;
 
 function usageLine(input: number, cacheRead: number, cacheWrite = 0): string {
@@ -45,9 +51,8 @@ function usageLine(input: number, cacheRead: number, cacheWrite = 0): string {
 }
 
 function makeSessionFile(ageMs: number): string {
-  const dir = mkdirSync(join(tmpdir(), `autorotate-${Date.now()}-${Math.random()}`), {
-    recursive: true,
-  });
+  const dir = join(tmpdir(), `autorotate-${Date.now()}-${Math.random()}`);
+  mkdirSync(dir, { recursive: true });
   const file = join(dir, 'session.jsonl');
   writeFileSync(file, '{}\n');
   const aged = new Date(Date.now() - ageMs);
@@ -111,15 +116,15 @@ describe('estimateContextTokens', () => {
 describe('runAutoRotate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    config.autoRotateIdleHours = 12;
-    config.autoRotateMinContextTokens = 100_000;
+    knobs.autoRotateIdleHours = 12;
+    knobs.autoRotateMinContextTokens = 100_000;
     mocks.channelsWithPending.mockReturnValue([]);
     mocks.isChannelProcessing.mockReturnValue(false);
     mocks.fetchChannel.mockResolvedValue({ send: mocks.send } as any);
   });
 
   afterEach(() => {
-    config.autoRotateIdleHours = 12;
+    knobs.autoRotateIdleHours = 12;
   });
 
   function armIdleChannel(): void {
@@ -230,7 +235,7 @@ describe('runAutoRotate', () => {
   });
 
   it('does nothing when disabled', async () => {
-    config.autoRotateIdleHours = 0;
+    knobs.autoRotateIdleHours = 0;
     armIdleChannel();
 
     await runAutoRotate();
