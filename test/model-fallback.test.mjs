@@ -20,7 +20,10 @@ config.fallbackStrategy = 'per-message';
 clearStickyFallback(FOLDER);
 const ra = await invokeAgent(FOLDER, 'Reply with exactly: OK', { model: BOGUS });
 check('A fallback answers after bogus primary', ra.ok === true && /ok/i.test(ra.text));
-check('A fallback notice names the fallback model', !!ra.modelFallbackNotice && ra.modelFallbackNotice.includes('zai-coding-cn/glm-5.3-flash'));
+check(
+  'A fallback notice names the fallback model',
+  !!ra.modelFallbackNotice && ra.modelFallbackNotice.includes('zai-coding-cn/glm-5.3-flash'),
+);
 
 // B. sticky: with the fallback list emptied, the sticky fallback still answers.
 config.fallbackStrategy = 'sticky';
@@ -38,18 +41,29 @@ check('B2 sticky answer still carries notice', !!rb2.modelFallbackNotice);
 config.autoRotateIdleHours = 1e-6; // ≈3.6ms
 await new Promise((r) => setTimeout(r, 50));
 const re = await invokeAgent(FOLDER, 'Reply with exactly: OK', { model: BOGUS });
-check('E idle-expired sticky → primary retried and fails', re.ok === false && !!re.error && /bogus|not found/i.test(re.error));
+check(
+  'E idle-expired sticky → primary retried and fails',
+  re.ok === false && !!re.error && /bogus|not found/i.test(re.error),
+);
 config.autoRotateIdleHours = 6;
 
 // C. clearStickyFallback (what /new and /model call): back to bogus → fails.
 clearStickyFallback(FOLDER);
 const rc = await invokeAgent(FOLDER, 'Reply with exactly: OK', { model: BOGUS });
-check('C sticky cleared → fails cleanly', rc.ok === false && !!rc.error && /bogus|not found/i.test(rc.error));
+check(
+  'C sticky cleared → fails cleanly',
+  rc.ok === false && !!rc.error && /bogus|not found/i.test(rc.error),
+);
 
 // D. success on the requested primary → no notice, no sticky set.
 config.piModelFallbacks.splice(0, config.piModelFallbacks.length, 'zai-coding-cn/glm-5.3-flash');
-const rd = await invokeAgent(FOLDER, 'Reply with exactly: OK', { model: 'openmodel/deepseek-v4.1-flash' });
-check('D primary success has no fallback notice', rd.ok === true && rd.modelFallbackNotice === undefined);
+const rd = await invokeAgent(FOLDER, 'Reply with exactly: OK', {
+  model: 'openmodel/deepseek-v4.1-flash',
+});
+check(
+  'D primary success has no fallback notice',
+  rd.ok === true && rd.modelFallbackNotice === undefined,
+);
 config.piModelFallbacks.splice(0, config.piModelFallbacks.length);
 const rd2 = await invokeAgent(FOLDER, 'Reply with exactly: OK', { model: BOGUS });
 check('D no sticky was set by primary success', rd2.ok === false);

@@ -167,9 +167,10 @@ export const config = {
   /** Return-from-fallback strategy: 'per-message' retries the primary model
    * on every invocation; 'sticky' keeps the fallback that answered until the
    * channel session is reset with /new. */
-  fallbackStrategy: env('PI_FALLBACK_STRATEGY').trim().toLowerCase() === 'sticky'
-    ? ('sticky' as const)
-    : ('per-message' as const),
+  fallbackStrategy:
+    env('PI_FALLBACK_STRATEGY').trim().toLowerCase() === 'sticky'
+      ? ('sticky' as const)
+      : ('per-message' as const),
 
   /** Thinking level for pi */
   piThinking: env('PI_THINKING'),

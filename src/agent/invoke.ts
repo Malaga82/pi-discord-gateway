@@ -56,7 +56,10 @@ export function clearStickyFallback(channelFolder: string): void {
 
 /** The sticky fallback for a channel, or undefined when absent/expired.
  * Expired entries are dropped so the next fallback re-arms fresh. */
-function currentSticky(channelFolder: string, prevInvokeAt: number | undefined): string | undefined {
+function currentSticky(
+  channelFolder: string,
+  prevInvokeAt: number | undefined,
+): string | undefined {
   const entry = stickyFallback.get(channelFolder);
   if (!entry) return undefined;
   const idleMs = config.autoRotateIdleHours * 3_600_000;
@@ -167,9 +170,8 @@ export async function invokeAgent(
   // `--model` flag so a retry only swaps its value — the prompt (last arg)
   // and everything else stay untouched.
   const requested = opts?.model || config.piModel;
-  const sticky = config.fallbackStrategy === 'sticky'
-    ? currentSticky(channelFolder, prevInvokeAt)
-    : undefined;
+  const sticky =
+    config.fallbackStrategy === 'sticky' ? currentSticky(channelFolder, prevInvokeAt) : undefined;
   const candidates = [sticky, requested, ...config.piModelFallbacks].filter(
     (m, i, all): m is string => Boolean(m) && all.indexOf(m) === i,
   );
@@ -256,168 +258,186 @@ export async function invokeAgent(
   // plain-text success fallback (STREAMING=off) that never carried it.
   const attempt = (): Promise<AgentResult> =>
     new Promise<AgentResult>((resolve, reject) => {
-    // Own process group (POSIX): timeout/abort must take down the whole tree —
-    // pi's bash grandchildren would otherwise survive a lone proc.kill().
-    // ponytail ceiling: a SIGKILL of the gateway itself can orphan this group
-    // until pi's next stdout write fails (EPIPE). Full fix = the runProcess
-    // supervisor IPC, which does not support JSONL streaming yet.
-    const proc = spawn(effectiveBin, effectiveArgs, {
-      cwd: effectiveCwd,
-      env: sanitizedChildEnv(),
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: process.platform !== 'win32',
-    });
-
-    // Streaming mode keeps only the JSONL event stream; plain mode buffers stdout.
-    const chunks: Buffer[] = [];
-    let outBytes = 0;
-    const errChunks: Buffer[] = [];
-
-    // Incremental JSONL parsing for streaming mode. If pi produces no valid
-    // JSON events (older binary, changed output format) we fall back to the
-    // legacy plain-text handling below — stdout keeps being buffered until
-    // the first valid event arrives, so the fallback stays available.
-    let sawJson = false;
-    let finalText = '';
-    const reader = createJsonLineReader((line) => {
-      let event: any;
-      try {
-        event = JSON.parse(line);
-      } catch {
-        event = undefined;
-      }
-      if (event && typeof event === 'object' && typeof event.type === 'string') {
-        sawJson = true;
-        const text = extractAssistantText(event);
-        if (text) finalText = text;
-        try {
-          onEvent?.(event);
-        } catch {
-          // Consumer errors must not break the agent invocation.
-        }
-      }
-    });
-
-    proc.stdout.on('data', (c: Buffer) => {
-      if (onEvent) reader.push(c);
-      // Buffer for the plain-text fallback until the first valid JSON event
-      // proves pi honored --mode json; after that the buffer is dead weight.
-      // Same 64 KB cap as the stderr buffer below: a chatty pi that never
-      // emits valid JSON must not grow the heap without bound.
-      if (!sawJson && outBytes < 64 * 1024) {
-        chunks.push(c);
-        outBytes += c.length;
-      }
-    });
-    // Cap stderr retention: consumers slice the last 600 chars anyway.
-    let errBytes = 0;
-    proc.stderr.on('data', (c: Buffer) => {
-      if (errBytes >= 64 * 1024) return;
-      errChunks.push(c);
-      errBytes += c.length;
-    });
-
-    // Abort support
-    let escalationTimer: NodeJS.Timeout | undefined;
-    const clearKillTimers = () => {
-      if (escalationTimer) clearTimeout(escalationTimer);
-      escalationTimer = undefined;
-    };
-    const killTree = (signal: NodeJS.Signals) => {
-      if (!proc.pid) return;
-      try {
-        process.kill(-proc.pid, signal);
-      } catch (err: any) {
-        // Group already gone (ESRCH): nothing to signal. Anything else
-        // (e.g. EPERM on a setuid grandchild): fall back to pi alone.
-        if (err?.code !== 'ESRCH') proc.kill(signal);
-      }
-    };
-    const killProc = () => {
-      if (process.platform === 'win32') {
-        proc.kill();
-        // Tree kill on Windows: taskkill /T walks pi's children too.
-        const killer = spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], {
-          stdio: 'ignore',
-          windowsHide: true,
-        });
-        killer.on('error', () => undefined);
-      } else {
-        // Negative pid = the whole process group (see detached above).
-        killTree('SIGTERM');
-        escalationTimer = setTimeout(() => killTree('SIGKILL'), 5000);
-      }
-      // Grandchildren (e.g. `sleep` under sh) inherit the stdio pipes and keep
-      // them open, delaying the 'close' event long after the kill. Destroying
-      // our ends releases it so the invocation resolves promptly.
-      proc.stdout.destroy();
-      proc.stderr.destroy();
-    };
-    if (opts?.signal) {
-      const onAbort = () => {
-        killProc();
-      };
-      opts.signal.addEventListener('abort', onAbort, { once: true });
-      proc.on('close', () => {
-        opts.signal!.removeEventListener('abort', onAbort);
-        clearKillTimers();
+      // Own process group (POSIX): timeout/abort must take down the whole tree —
+      // pi's bash grandchildren would otherwise survive a lone proc.kill().
+      // ponytail ceiling: a SIGKILL of the gateway itself can orphan this group
+      // until pi's next stdout write fails (EPIPE). Full fix = the runProcess
+      // supervisor IPC, which does not support JSONL streaming yet.
+      const proc = spawn(effectiveBin, effectiveArgs, {
+        cwd: effectiveCwd,
+        env: sanitizedChildEnv(),
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
       });
-    }
 
-    // Per-invocation timeout: a hung pi must not hold the channel lock forever.
-    let timedOut = false;
-    let timeoutTimer: NodeJS.Timeout | undefined;
-    if (config.agentTimeoutMs > 0) {
-      timeoutTimer = setTimeout(() => {
-        timedOut = true;
-        logger.warn(
-          { channelFolder, timeoutMs: config.agentTimeoutMs },
-          'Agent invocation timed out',
-        );
-        killProc();
-      }, config.agentTimeoutMs);
-      timeoutTimer.unref();
-    }
+      // Streaming mode keeps only the JSONL event stream; plain mode buffers stdout.
+      const chunks: Buffer[] = [];
+      let outBytes = 0;
+      const errChunks: Buffer[] = [];
 
-    proc.on('close', (code, killSignal) => {
-      clearKillTimers();
-      if (timeoutTimer) clearTimeout(timeoutTimer);
-      if (onEvent) reader.end();
-      const stdout = sawJson ? '' : Buffer.concat(chunks).toString('utf-8').trim();
-      const stderr = Buffer.concat(errChunks).toString('utf-8').trim();
+      // Incremental JSONL parsing for streaming mode. If pi produces no valid
+      // JSON events (older binary, changed output format) we fall back to the
+      // legacy plain-text handling below — stdout keeps being buffered until
+      // the first valid event arrives, so the fallback stays available.
+      let sawJson = false;
+      let finalText = '';
+      const reader = createJsonLineReader((line) => {
+        let event: any;
+        try {
+          event = JSON.parse(line);
+        } catch {
+          event = undefined;
+        }
+        if (event && typeof event === 'object' && typeof event.type === 'string') {
+          sawJson = true;
+          const text = extractAssistantText(event);
+          if (text) finalText = text;
+          try {
+            onEvent?.(event);
+          } catch {
+            // Consumer errors must not break the agent invocation.
+          }
+        }
+      });
 
-      if (timedOut) {
-        resolve({
-          ok: false,
-          text: '',
-          error: `Agent invocation timed out after ${config.agentTimeoutMs}ms`,
-          timedOut: true,
-          reason: 'timeout',
-        });
-        return;
-      }
+      proc.stdout.on('data', (c: Buffer) => {
+        if (onEvent) reader.push(c);
+        // Buffer for the plain-text fallback until the first valid JSON event
+        // proves pi honored --mode json; after that the buffer is dead weight.
+        // Same 64 KB cap as the stderr buffer below: a chatty pi that never
+        // emits valid JSON must not grow the heap without bound.
+        if (!sawJson && outBytes < 64 * 1024) {
+          chunks.push(c);
+          outBytes += c.length;
+        }
+      });
+      // Cap stderr retention: consumers slice the last 600 chars anyway.
+      let errBytes = 0;
+      proc.stderr.on('data', (c: Buffer) => {
+        if (errBytes >= 64 * 1024) return;
+        errChunks.push(c);
+        errBytes += c.length;
+      });
 
-      if (code !== 0) {
-        // SIGTERM/SIGKILL (exit 143/137) = shutdown/restart or abort,
-        // not a pi failure — callers use this to preserve the log and
-        // skip the ⚠️ error message.
-        const killed = code === 143 || code === 137 || killSignal !== null;
-        logger.warn({ code, stderr: stderr.slice(0, 500), channelFolder }, 'pi exited with error');
-        resolve({
-          ok: false,
-          text: '',
-          error: stderr.slice(0, 600) || `pi exited with code ${code}`,
-          killed,
-          reason: killed ? 'cancelled' : undefined,
-          fallbackable: !killed,
-        });
-        return;
-      }
-
-      if (sawJson) {
-        if (finalText) {
-          resolve({ ok: true, text: finalText });
+      // Abort support
+      let escalationTimer: NodeJS.Timeout | undefined;
+      const clearKillTimers = () => {
+        if (escalationTimer) clearTimeout(escalationTimer);
+        escalationTimer = undefined;
+      };
+      const killTree = (signal: NodeJS.Signals) => {
+        if (!proc.pid) return;
+        try {
+          process.kill(-proc.pid, signal);
+        } catch (err: any) {
+          // Group already gone (ESRCH): nothing to signal. Anything else
+          // (e.g. EPERM on a setuid grandchild): fall back to pi alone.
+          if (err?.code !== 'ESRCH') proc.kill(signal);
+        }
+      };
+      const killProc = () => {
+        if (process.platform === 'win32') {
+          proc.kill();
+          // Tree kill on Windows: taskkill /T walks pi's children too.
+          const killer = spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], {
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+          killer.on('error', () => undefined);
         } else {
+          // Negative pid = the whole process group (see detached above).
+          killTree('SIGTERM');
+          escalationTimer = setTimeout(() => killTree('SIGKILL'), 5000);
+        }
+        // Grandchildren (e.g. `sleep` under sh) inherit the stdio pipes and keep
+        // them open, delaying the 'close' event long after the kill. Destroying
+        // our ends releases it so the invocation resolves promptly.
+        proc.stdout.destroy();
+        proc.stderr.destroy();
+      };
+      if (opts?.signal) {
+        const onAbort = () => {
+          killProc();
+        };
+        opts.signal.addEventListener('abort', onAbort, { once: true });
+        proc.on('close', () => {
+          opts.signal!.removeEventListener('abort', onAbort);
+          clearKillTimers();
+        });
+      }
+
+      // Per-invocation timeout: a hung pi must not hold the channel lock forever.
+      let timedOut = false;
+      let timeoutTimer: NodeJS.Timeout | undefined;
+      if (config.agentTimeoutMs > 0) {
+        timeoutTimer = setTimeout(() => {
+          timedOut = true;
+          logger.warn(
+            { channelFolder, timeoutMs: config.agentTimeoutMs },
+            'Agent invocation timed out',
+          );
+          killProc();
+        }, config.agentTimeoutMs);
+        timeoutTimer.unref();
+      }
+
+      proc.on('close', (code, killSignal) => {
+        clearKillTimers();
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        if (onEvent) reader.end();
+        const stdout = sawJson ? '' : Buffer.concat(chunks).toString('utf-8').trim();
+        const stderr = Buffer.concat(errChunks).toString('utf-8').trim();
+
+        if (timedOut) {
+          resolve({
+            ok: false,
+            text: '',
+            error: `Agent invocation timed out after ${config.agentTimeoutMs}ms`,
+            timedOut: true,
+            reason: 'timeout',
+          });
+          return;
+        }
+
+        if (code !== 0) {
+          // SIGTERM/SIGKILL (exit 143/137) = shutdown/restart or abort,
+          // not a pi failure — callers use this to preserve the log and
+          // skip the ⚠️ error message.
+          const killed = code === 143 || code === 137 || killSignal !== null;
+          logger.warn(
+            { code, stderr: stderr.slice(0, 500), channelFolder },
+            'pi exited with error',
+          );
+          resolve({
+            ok: false,
+            text: '',
+            error: stderr.slice(0, 600) || `pi exited with code ${code}`,
+            killed,
+            reason: killed ? 'cancelled' : undefined,
+            fallbackable: !killed,
+          });
+          return;
+        }
+
+        if (sawJson) {
+          if (finalText) {
+            resolve({ ok: true, text: finalText });
+          } else {
+            const sessionError = readLatestAgentErrorFromSession(channelFolder);
+            resolve({
+              ok: false,
+              text: '',
+              error:
+                sessionError ||
+                stderr.slice(0, 600) ||
+                'pi completed without producing a response (no assistant text in event stream)',
+              fallbackable: true,
+            });
+          }
+          return;
+        }
+
+        if (!stdout) {
           const sessionError = readLatestAgentErrorFromSession(channelFolder);
           resolve({
             ok: false,
@@ -425,35 +445,20 @@ export async function invokeAgent(
             error:
               sessionError ||
               stderr.slice(0, 600) ||
-              'pi completed without producing a response (no assistant text in event stream)',
+              'pi completed without producing a response (empty stdout)',
             fallbackable: true,
           });
+          return;
         }
-        return;
-      }
 
-      if (!stdout) {
-        const sessionError = readLatestAgentErrorFromSession(channelFolder);
-        resolve({
-          ok: false,
-          text: '',
-          error:
-            sessionError ||
-            stderr.slice(0, 600) ||
-            'pi completed without producing a response (empty stdout)',
-          fallbackable: true,
-        });
-        return;
-      }
+        resolve({ ok: true, text: stdout });
+      });
 
-      resolve({ ok: true, text: stdout });
+      proc.on('error', (err) => {
+        logger.error({ err: err.message }, 'Failed to spawn pi');
+        reject(err);
+      });
     });
-
-    proc.on('error', (err) => {
-      logger.error({ err: err.message }, 'Failed to spawn pi');
-      reject(err);
-    });
-  });
 
   // Fallback chain: while the failure is one another model could fix
   // (fallbackable) and candidates remain, swap --model and retry. Killed,
@@ -483,8 +488,7 @@ export async function invokeAgent(
       stickyFallback.set(channelFolder, { model: usedModel, since: Date.now() });
     }
     if (usedModel !== requested) {
-      result.modelFallbackNotice =
-        `Modello primario ${requested || '(default)'} non disponibile: risposta generata con ${usedModel}.`;
+      result.modelFallbackNotice = `Modello primario ${requested || '(default)'} non disponibile: risposta generata con ${usedModel}.`;
     }
   }
 
@@ -819,7 +823,11 @@ function readThinkingLevelFromTail(sessionFile: string): string | undefined {
         type?: string;
         message?: { role?: string; thinkingLevel?: string };
       };
-      if (entry.type === 'message' && entry.message?.role === 'assistant' && entry.message.thinkingLevel) {
+      if (
+        entry.type === 'message' &&
+        entry.message?.role === 'assistant' &&
+        entry.message.thinkingLevel
+      ) {
         return entry.message.thinkingLevel;
       }
     } catch {
