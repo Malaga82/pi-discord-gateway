@@ -22,6 +22,9 @@ export interface AvailableModelInfo {
   name: string;
   reasoning: boolean;
   supportsXhigh: boolean;
+  /** Context window in tokens, from the `pi --list-models` context column
+   * (e.g. "1M", "128K"). Undefined when the column is missing/unparseable. */
+  contextWindow?: number;
 }
 interface ModelCache {
   models?: AvailableModelInfo[];
@@ -520,6 +523,7 @@ interface ModelTableHeader {
   providerIndex: number;
   modelIndex: number;
   thinkingIndex: number;
+  contextIndex?: number;
   rowsStart: number;
 }
 
@@ -533,7 +537,13 @@ function findModelTableHeader(lines: string[]): ModelTableHeader | undefined {
     const modelIndex = headers.indexOf('model');
     const thinkingIndex = headers.indexOf('thinking');
     if (providerIndex !== -1 && modelIndex !== -1 && thinkingIndex !== -1) {
-      return { providerIndex, modelIndex, thinkingIndex, rowsStart: index + 1 };
+      return {
+        providerIndex,
+        modelIndex,
+        thinkingIndex,
+        contextIndex: headers.indexOf('context'),
+        rowsStart: index + 1,
+      };
     }
   }
   return undefined;
@@ -570,9 +580,23 @@ export function parsePiModelList(output: string): AvailableModelInfo[] | undefin
         // The text table exposes only yes/no thinking support. Let pi perform
         // model-specific clamping for CLI-only models unknown to the bundled SDK.
         supportsXhigh: reasoning,
+        contextWindow: header.contextIndex
+          ? parseContextWindow(columns[header.contextIndex])
+          : undefined,
       },
     ];
   });
+}
+
+/** "1M" → 1e6, "128K" → 128000, "16.4K" → 16400, "131072" → 131072. */
+export function parseContextWindow(raw: string | undefined): number | undefined {
+  if (!raw) return undefined;
+  const match = raw.trim().match(/^([\d.]+)\s*([mMkK]?)$/);
+  if (!match) return undefined;
+  const value = Number.parseFloat(match[1]);
+  if (!Number.isFinite(value)) return undefined;
+  const unit = match[2].toLowerCase();
+  return Math.round(value * (unit === 'm' ? 1e6 : unit === 'k' ? 1e3 : 1));
 }
 
 function mergeModelMetadata(

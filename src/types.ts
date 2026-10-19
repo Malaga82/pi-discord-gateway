@@ -66,4 +66,10 @@ export interface AgentResult {
   /** Attachments were dropped or partially downloaded: surfaced to the
    * channel as a queue notice regardless of how the run ends. */
   attachmentNotice?: string;
+  /** Internal: a PI_MODEL_FALLBACKS retry with the next candidate could still
+   * succeed (model/provider-related failure, nothing delivered yet). */
+  fallbackable?: boolean;
+  /** The primary model failed and a fallback answered: surfaced to the
+   * channel through the queue-notice machinery. */
+  modelFallbackNotice?: string;
 }

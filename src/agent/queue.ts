@@ -411,6 +411,12 @@ async function processMessage(
       setQueueNotice(rowid, `Task #${rowid}: ${result.attachmentNotice}`);
     }
 
+    if (result.modelFallbackNotice) {
+      // Informational: the primary model failed and a fallback answered.
+      // Same machinery — a separate ⚠️ message, independent of the answer.
+      setQueueNotice(rowid, `Task #${rowid}: ${result.modelFallbackNotice}`);
+    }
+
     if (signal.aborted) {
       // Shutdown interrupted processing: leave the row 'processing' so the
       // next boot's recoverStuckMessages() parks it as interrupted with a

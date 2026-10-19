@@ -9,7 +9,9 @@ import {
   type InteractionReplyOptions,
 } from 'discord.js';
 import {
+  clearStickyFallback,
   getChannelSessionStatus,
+  getStickyFallback,
   type ChannelSessionStatus,
   type SessionContextUsage,
   type SessionTokenUsage,
@@ -317,6 +319,8 @@ export async function handleNew(interaction: ChatInputCommandInteraction): Promi
 
   const cleared = cancelQueuedMessages(channel.jid);
   const archivedSession = rotateChannelSessionDir(channel.folder);
+  // Sticky fallback is scoped to the session: /new means "back to primary".
+  clearStickyFallback(channel.folder);
 
   logger.info(
     { jid: channel.jid, cleared, archived: Boolean(archivedSession) },
@@ -375,7 +379,10 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
     ? `Settings inherit from <#${channel.parentJid.replace(/^dc:/, '')}> unless overridden.`
     : `Automatic threads: ${channel.threadMode === 'auto' ? 'on' : 'off'}.`;
   await interaction.editReply({
-    content: `${buildStatusMessage(effective, sessionStatus, { isDm: !interaction.inGuild() })}\n${threadStatus}`,
+    content: `${buildStatusMessage(effective, sessionStatus, {
+      isDm: !interaction.inGuild(),
+      channelFolder: channel.folder,
+    })}\n${threadStatus}`,
   });
 }
 
@@ -401,6 +408,8 @@ async function handleModelSet(interaction: ChatInputCommandInteraction): Promise
   }
 
   setChannelModelOverride(channel.jid, selectedModel.ref);
+  // An explicit /model pin outranks the sticky fallback.
+  clearStickyFallback(channel.folder);
 
   // Re-read channel to use the persisted override in status/effective computation.
   const updated = getChannel(channel.jid)!;
@@ -438,6 +447,8 @@ async function handleModelReset(interaction: ChatInputCommandInteraction): Promi
   );
 
   clearChannelModelOverride(channel.jid);
+  // Back to the default primary: drop any sticky fallback too.
+  clearStickyFallback(channel.folder);
 
   const updated = getChannel(channel.jid)!;
   const effective = computeEffectiveChannelSettings(updated);
@@ -520,12 +531,13 @@ function notRegisteredMessage(): string {
 export function buildStatusMessage(
   effective: EffectiveChannelSettings,
   sessionStatus: ChannelSessionStatus,
-  opts: { isDm?: boolean } = {},
+  opts: { isDm?: boolean; channelFolder?: string } = {},
 ): string {
   const rows: Array<[string, string]> = [
     ['Model', formatModelValue(effective)],
     ['Model catalog', getModelCatalogStatus(effective.effectiveCwd)],
-    ['Thinking', formatThinkingValue(effective)],
+    ['Thinking', formatThinkingValue(effective, sessionStatus.thinkingLevel)],
+    ['Fallback model', formatFallbackModelValue(opts.channelFolder)],
   ];
 
   // Working dir is a host path: meaningful in the guild it serves, a leak in
@@ -559,12 +571,24 @@ function formatModelValue(effective: EffectiveChannelSettings): string {
   return `${effective.displayModel} (${formatSettingSource(effective.modelSource)})`;
 }
 
-function formatThinkingValue(effective: EffectiveChannelSettings): string {
+function formatThinkingValue(effective: EffectiveChannelSettings, sessionLevel?: string): string {
+  // The effort actually used by the last assistant turn is the ground truth.
+  if (sessionLevel) {
+    return `${sessionLevel} (session)`;
+  }
+
   if (!effective.hasManagedThinking || effective.thinkingSource === 'pi runtime default') {
     return 'pi runtime default';
   }
 
   return `${effective.effectiveThinking} (${formatSettingSource(effective.thinkingSource)})`;
+}
+
+function formatFallbackModelValue(channelFolder?: string): string {
+  const chain = config.piModelFallbacks.join(', ') || 'none';
+  const active = channelFolder ? getStickyFallback(channelFolder) : undefined;
+  const stickyNote = active ? ` (active: ${active})` : '';
+  return `${config.fallbackStrategy}: ${chain}${stickyNote}`;
 }
 
 function formatThinkingFallback(effective: EffectiveChannelSettings): string {

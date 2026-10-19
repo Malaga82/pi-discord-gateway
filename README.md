@@ -249,6 +249,8 @@ Most users won't need to edit this file directly — `piscord setup` generates i
 | `DISCORD_BOT_TOKEN`              | _(required)_                    | Discord bot token                                                                                                                |
 | `PI_BIN`                         | `pi`                            | Path to pi binary                                                                                                                |
 | `PI_MODEL`                       | _(none)_                        | Default model override                                                                                                           |
+| `PI_MODEL_FALLBACKS`             | _(none)_                        | Comma/space-separated `provider/model` refs tried in order when a run fails in a way another model could fix                       |
+| `PI_FALLBACK_STRATEGY`           | `per-message`                   | `per-message`: retry the primary on every invocation. `sticky`: keep the fallback that answered until /new, /model, or `AUTO_ROTATE_IDLE_HOURS` of channel inactivity |
 | `PI_THINKING`                    | _(none)_                        | Default thinking level                                                                                                           |
 | `PI_CWD`                         | `$HOME`                         | Default working directory for pi; can be overridden per registered channel                                                       |
 | `PI_EXTRA_FLAGS`                 | _(none)_                        | Extra flags passed to pi                                                                                                         |

@@ -155,6 +155,22 @@ export const config = {
   /** Default model for pi */
   piModel: env('PI_MODEL'),
 
+  /** Ordered fallback models (PI_MODEL_FALLBACKS: comma/space-separated
+   * `provider/model` refs). Tried in order when a run fails in a way another
+   * model could fix (unknown model, missing provider key, provider API error).
+   * Killed/timed-out/aborted runs never retry. */
+  piModelFallbacks: env('PI_MODEL_FALLBACKS')
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean),
+
+  /** Return-from-fallback strategy: 'per-message' retries the primary model
+   * on every invocation; 'sticky' keeps the fallback that answered until the
+   * channel session is reset with /new. */
+  fallbackStrategy: env('PI_FALLBACK_STRATEGY').trim().toLowerCase() === 'sticky'
+    ? ('sticky' as const)
+    : ('per-message' as const),
+
   /** Thinking level for pi */
   piThinking: env('PI_THINKING'),
 

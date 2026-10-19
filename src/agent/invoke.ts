@@ -12,6 +12,7 @@ import {
   resolveLatestChannelSessionFile,
 } from '../session/path.js';
 import type { AgentResult } from '../types.js';
+import { listAvailableModels } from './model-catalog.js';
 import { resolvePiSpawn, sanitizedChildEnv } from './pi-spawn.js';
 
 export interface SessionTokenUsage {
@@ -34,6 +35,43 @@ export interface ChannelSessionStatus {
   tokens?: SessionTokenUsage;
   contextUsage?: SessionContextUsage;
   statsSource: 'rpc' | 'jsonl' | 'none';
+  /** Thinking effort actually used by the last assistant turn (session JSONL). */
+  thinkingLevel?: string;
+}
+
+/** Channels currently held on a fallback model (PI_FALLBACK_STRATEGY=sticky):
+ * set when a fallback answers, cleared when the requested primary answers
+ * again, the session is reset (/new, /model → clearStickyFallback), or the
+ * channel has been idle for AUTO_ROTATE_IDLE_HOURS (same idle timer as
+ * session auto-rotation): the next message retries the primary.
+ * In-memory by design: after a gateway restart every channel simply retries
+ * the primary and re-falls back if it still fails. */
+const stickyFallback = new Map<string, { model: string; since: number }>();
+/** Last invokeAgent start per channel folder — the idle signal for sticky
+ * expiry. In-memory like the sticky map itself. */
+const lastInvokeAt = new Map<string, number>();
+export function clearStickyFallback(channelFolder: string): void {
+  stickyFallback.delete(channelFolder);
+}
+
+/** The sticky fallback for a channel, or undefined when absent/expired.
+ * Expired entries are dropped so the next fallback re-arms fresh. */
+function currentSticky(channelFolder: string, prevInvokeAt: number | undefined): string | undefined {
+  const entry = stickyFallback.get(channelFolder);
+  if (!entry) return undefined;
+  const idleMs = config.autoRotateIdleHours * 3_600_000;
+  const reference = prevInvokeAt ?? entry.since;
+  if (config.autoRotateIdleHours > 0 && Date.now() - reference >= idleMs) {
+    stickyFallback.delete(channelFolder);
+    return undefined;
+  }
+  return entry.model;
+}
+
+/** Display-time read of the sticky fallback (/pi status): same expiry rules
+ * as invocation, with the idle window measured from the last invoke. */
+export function getStickyFallback(channelFolder: string): string | undefined {
+  return currentSticky(channelFolder, lastInvokeAt.get(channelFolder));
 }
 
 /**
@@ -114,13 +152,30 @@ export async function invokeAgent(
   mkdirSync(sessionDir, { recursive: true });
   const effectiveCwd = opts?.cwd || config.piCwd;
 
+  // Idle tracking for sticky-fallback expiry: the gap between the previous
+  // invoke and this one is the channel's silence window.
+  const prevInvokeAt = lastInvokeAt.get(channelFolder);
+  lastInvokeAt.set(channelFolder, Date.now());
+
   // `--session` expects a session *file* path. We want a dedicated directory per
   // Discord channel and to keep reusing the most recent session inside it.
   const args: string[] = ['--session-dir', sessionDir, '--continue'];
 
-  // Model
-  const model = opts?.model || config.piModel;
-  if (model) args.push('--model', model);
+  // Model + fallback chain. Head-first: with PI_FALLBACK_STRATEGY=sticky a
+  // previously-successful fallback leads the chain, the requested primary
+  // follows, then PI_MODEL_FALLBACKS (deduped). modelArgIndex points at the
+  // `--model` flag so a retry only swaps its value — the prompt (last arg)
+  // and everything else stay untouched.
+  const requested = opts?.model || config.piModel;
+  const sticky = config.fallbackStrategy === 'sticky'
+    ? currentSticky(channelFolder, prevInvokeAt)
+    : undefined;
+  const candidates = [sticky, requested, ...config.piModelFallbacks].filter(
+    (m, i, all): m is string => Boolean(m) && all.indexOf(m) === i,
+  );
+  const primary = candidates[0];
+  const modelArgIndex = args.length;
+  if (primary) args.push('--model', primary);
 
   // Thinking
   const thinking = opts?.thinking || config.piThinking;
@@ -199,7 +254,8 @@ export async function invokeAgent(
   // up the attachment shortfall notice from the closure — per-literal fields
   // are how the previous version lost three of eight paths, including the
   // plain-text success fallback (STREAMING=off) that never carried it.
-  const result = await new Promise<AgentResult>((resolve, reject) => {
+  const attempt = (): Promise<AgentResult> =>
+    new Promise<AgentResult>((resolve, reject) => {
     // Own process group (POSIX): timeout/abort must take down the whole tree —
     // pi's bash grandchildren would otherwise survive a lone proc.kill().
     // ponytail ceiling: a SIGKILL of the gateway itself can orphan this group
@@ -353,6 +409,7 @@ export async function invokeAgent(
           error: stderr.slice(0, 600) || `pi exited with code ${code}`,
           killed,
           reason: killed ? 'cancelled' : undefined,
+          fallbackable: !killed,
         });
         return;
       }
@@ -369,6 +426,7 @@ export async function invokeAgent(
               sessionError ||
               stderr.slice(0, 600) ||
               'pi completed without producing a response (no assistant text in event stream)',
+            fallbackable: true,
           });
         }
         return;
@@ -383,6 +441,7 @@ export async function invokeAgent(
             sessionError ||
             stderr.slice(0, 600) ||
             'pi completed without producing a response (empty stdout)',
+          fallbackable: true,
         });
         return;
       }
@@ -396,10 +455,45 @@ export async function invokeAgent(
     });
   });
 
+  // Fallback chain: while the failure is one another model could fix
+  // (fallbackable) and candidates remain, swap --model and retry. Killed,
+  // timed-out and aborted runs never retry; spawn failures reject and never
+  // retry. Safe mid-stream: the retry's message_start resets the live stream
+  // state and finalizeStream overwrites with the final text.
+  // ponytail: a failed run may leave the user prompt in the session JSONL, so
+  // the retried turn can hold that prompt twice — accepted; a fresh session
+  // per attempt would lose channel context instead.
+  let result = await attempt();
+  let usedIdx = 0;
+  for (let i = 1; !result.ok && result.fallbackable && i < candidates.length; i++) {
+    const to = candidates[i];
+    if (modelArgIndex >= 0) args[modelArgIndex + 1] = to;
+    logger.warn({ channelFolder, from: candidates[i - 1], to }, 'Model failed; trying fallback');
+    usedIdx = i;
+    result = await attempt();
+  }
+
+  // Sticky bookkeeping + user-facing notice: anything that answered while not
+  // being the requested model is a fallback by definition.
+  const usedModel = candidates[usedIdx];
+  if (result.ok && usedModel !== undefined) {
+    if (usedModel === requested) {
+      stickyFallback.delete(channelFolder);
+    } else if (config.fallbackStrategy === 'sticky') {
+      stickyFallback.set(channelFolder, { model: usedModel, since: Date.now() });
+    }
+    if (usedModel !== requested) {
+      result.modelFallbackNotice =
+        `Modello primario ${requested || '(default)'} non disponibile: risposta generata con ${usedModel}.`;
+    }
+  }
+
+  const { fallbackable, ...finalResult } = result;
+
   // Only the reject path (spawn failure) escapes without the notice: the
   // channel already gets an internal-error notice there, and no pi run
   // happened for the attachments to matter.
-  return attachmentNotice !== undefined ? { ...result, attachmentNotice } : result;
+  return attachmentNotice !== undefined ? { ...finalResult, attachmentNotice } : finalResult;
 }
 
 /** Return the final answer text from an assistant message_end event, if any.
@@ -530,6 +624,9 @@ export async function getChannelSessionStatus(
       createdAt,
       tokens: stats.tokens,
       contextUsage: stats.contextUsage,
+      // pi's RPC stats don't include the thinking effort; the session JSONL
+      // tail does (last assistant entry). Best-effort: never fail the status.
+      thinkingLevel: readThinkingLevelFromTail(sessionFile),
       statsSource: 'rpc',
     };
   } catch (err: any) {
@@ -538,15 +635,43 @@ export async function getChannelSessionStatus(
       'Failed to query pi session stats via RPC; falling back to session JSONL',
     );
 
-    return {
-      sessionFile,
-      createdAt,
-      tokens: await readSessionTokensFromJsonl(sessionFile),
-      statsSource: 'jsonl',
-    };
+    return await buildJsonlSessionStatus(sessionFile, createdAt, cwd);
   }
 }
 
+/** JSONL fallback for /pi status: token totals plus a synthesized context
+ * usage (last assistant turn's totalTokens vs the catalog's context window)
+ * and the thinking level actually used — none of which the JSONL path
+ * historically exposed, rendering `Context ?`. */
+async function buildJsonlSessionStatus(
+  sessionFile: string,
+  createdAt: string | undefined,
+  cwd: string,
+): Promise<ChannelSessionStatus> {
+  const { totals, last } = await readSessionUsageFromJsonl(sessionFile);
+  let contextUsage: SessionContextUsage | undefined;
+  if (last) {
+    const info = last.model
+      ? listAvailableModels({ cwd }).find((m) =>
+          m.ref.toLowerCase().endsWith(`/${last.model!.toLowerCase()}`),
+        )
+      : undefined;
+    const window = info?.contextWindow;
+    contextUsage = {
+      tokens: last.contextTokens,
+      contextWindow: window ?? null,
+      percent: window ? (last.contextTokens / window) * 100 : null,
+    };
+  }
+  return {
+    sessionFile,
+    createdAt,
+    tokens: totals,
+    contextUsage,
+    thinkingLevel: last?.thinkingLevel,
+    statsSource: 'jsonl',
+  };
+}
 interface RpcSessionStatsResponse {
   type: 'response';
   command: 'get_session_stats';
@@ -675,6 +800,34 @@ async function getSessionStatsViaRpc(
 }
 
 /** Read the last maxBytes of a file as lines (first line may be partial). */
+/** Thinking effort of the last assistant turn, from the session JSONL tail
+ * (64 KB is plenty: a usage line is short). undefined when absent/unreadable. */
+function readThinkingLevelFromTail(sessionFile: string): string | undefined {
+  let lines: string[];
+  try {
+    lines = readTailLines(sessionFile, 64 * 1024);
+  } catch {
+    return undefined;
+  }
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]?.trim();
+    if (!line) continue;
+    try {
+      const entry = JSON.parse(line) as {
+        type?: string;
+        message?: { role?: string; thinkingLevel?: string };
+      };
+      if (entry.type === 'message' && entry.message?.role === 'assistant' && entry.message.thinkingLevel) {
+        return entry.message.thinkingLevel;
+      }
+    } catch {
+      // Ignore malformed tail lines.
+    }
+  }
+  return undefined;
+}
+
 export function readTailLines(sessionFile: string, maxBytes: number): string[] {
   let fd: number | undefined;
   try {
@@ -693,7 +846,14 @@ export function readTailLines(sessionFile: string, maxBytes: number): string[] {
   }
 }
 
-async function readSessionTokensFromJsonl(sessionFile: string): Promise<SessionTokenUsage> {
+/** Exported for tests: tail state of the last assistant turn in a session.
+ * ponytail: model ref is matched by id suffix in the catalog, so two providers
+ * exposing the same model id share whichever entry matched first — a wrong
+ * window here only affects the /pi status estimate, never real runs. */
+export async function readSessionUsageFromJsonl(sessionFile: string): Promise<{
+  totals: SessionTokenUsage;
+  last?: { contextTokens: number; model?: string; thinkingLevel?: string };
+}> {
   const totals: SessionTokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
   // Cold path (/pi status only): whole-file read is acceptable, token totals
   // need every line anyway. Async read keeps the I/O off the event loop;
@@ -702,9 +862,10 @@ async function readSessionTokensFromJsonl(sessionFile: string): Promise<SessionT
   try {
     lines = (await readFile(sessionFile, 'utf-8')).split(/\r?\n/u);
   } catch {
-    return totals; // file vanished between listing and reading — report zeros
+    return { totals }; // file vanished between listing and reading — report zeros
   }
 
+  let last: { contextTokens: number; model?: string; thinkingLevel?: string } | undefined;
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -714,6 +875,8 @@ async function readSessionTokensFromJsonl(sessionFile: string): Promise<SessionT
         type?: string;
         message?: {
           role?: string;
+          model?: string;
+          thinkingLevel?: string;
           usage?: {
             input?: number;
             output?: number;
@@ -739,12 +902,21 @@ async function readSessionTokensFromJsonl(sessionFile: string): Promise<SessionT
       totals.cacheWrite += cacheWrite;
       totals.total +=
         toNumber(entry.message.usage.totalTokens) || input + output + cacheRead + cacheWrite;
+
+      // Last assistant turn = current context size (pi's get_session_stats
+      // reports the same value as contextUsage.tokens).
+      last = {
+        contextTokens:
+          toNumber(entry.message.usage.totalTokens) || input + output + cacheRead + cacheWrite,
+        model: entry.message.model,
+        thinkingLevel: entry.message.thinkingLevel,
+      };
     } catch {
       // Ignore incomplete or malformed trailing JSONL lines.
     }
   }
 
-  return totals;
+  return { totals, last };
 }
 
 function toNumber(value: number | undefined): number {
