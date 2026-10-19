@@ -488,7 +488,8 @@ export async function invokeAgent(
     }
   }
 
-  const { fallbackable, ...finalResult } = result;
+  const finalResult = { ...result };
+  delete finalResult.fallbackable;
 
   // Only the reject path (spawn failure) escapes without the notice: the
   // channel already gets an internal-error notice there, and no pi run

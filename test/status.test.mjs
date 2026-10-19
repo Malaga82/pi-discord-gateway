@@ -1,7 +1,7 @@
 // Pure checks for the /pi status upgrades: context column parsing, JSONL
 // usage tail, and the new status rows. Run from /root/pidiscord-fork:
 //   node test/status.test.mjs
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
